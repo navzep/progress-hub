@@ -24,7 +24,6 @@
   }
 
   var currentUser = null; // { id, email } while signed in, else null
-  var currentSession = null; // raw Supabase session object, for debug visibility
   var cloudSyncDebounceTimer = null;
   var realtimeChannel = null;
 
@@ -1873,24 +1872,15 @@
   }
 
   function updateAccountUI() {
-    console.log("[AUTH] renderAuthUI called", { currentUser: currentUser, currentSession: currentSession });
     var signInBtn = document.getElementById("sign-in-btn");
     var accountIndicator = document.getElementById("account-indicator");
     var accountEmail = document.getElementById("account-email");
-    if (!signInBtn || !accountIndicator || !accountEmail) {
-      console.log("[AUTH] renderAuthUI: header elements missing, aborting", {
-        signInBtn: !!signInBtn,
-        accountIndicator: !!accountIndicator,
-        accountEmail: !!accountEmail,
-      });
-      return;
-    }
+    if (!signInBtn || !accountIndicator || !accountEmail) return;
     if (currentUser) {
       signInBtn.hidden = true;
       accountIndicator.hidden = false;
       accountEmail.textContent = currentUser.email;
     } else {
-      console.log("[AUTH] rendering signed-out UI");
       signInBtn.hidden = false;
       accountIndicator.hidden = true;
       setSyncStatus("offline");
@@ -2248,7 +2238,6 @@
 
   function handleAuthChange(session) {
     var user = session && session.user ? { id: session.user.id, email: session.user.email } : null;
-    if (!user) console.log("[AUTH] SIGNED_OUT received");
 
     // Re-entrant guard: if this is the same user we already have loaded
     // (e.g. a duplicate INITIAL_SESSION firing, or any other spurious
@@ -2257,14 +2246,11 @@
     // don't overwrite in-memory edits with the last-synced cloud copy.
     if (user && currentUser && user.id === currentUser.id) {
       currentUser = user;
-      currentSession = session;
       updateAccountUI();
       return;
     }
 
-    console.log("[AUTH] clearing current user/session");
     currentUser = user;
-    currentSession = session;
     updateAccountUI();
     if (user) {
       var overlay = document.getElementById("modal-overlay");
@@ -2292,17 +2278,10 @@
         // skip the local UI update either — the user's intent to sign out
         // should always be reflected immediately regardless of network
         // outcome, rather than only showing up after a later reload.
-        console.log("[AUTH] Sign Out clicked");
-        console.log("[AUTH] currentUser before signOut:", currentUser);
-        console.log("[AUTH] currentSession before signOut:", currentSession);
-        console.log("[AUTH] calling supabase.auth.signOut()");
-        var result;
         try {
-          result = await supabaseClient.auth.signOut();
-          console.log("[AUTH] signOut result:", result);
-          console.log("[AUTH] signOut error:", result && result.error);
+          await supabaseClient.auth.signOut();
         } catch (e) {
-          console.log("[AUTH] signOut threw:", e);
+          /* fall through — still reflect signed-out state locally below */
         }
         handleAuthChange(null);
       });
@@ -2316,7 +2295,6 @@
     // periodically for the same signed-in user and must not re-trigger the
     // migration flow or overwrite in-progress local edits.
     supabaseClient.auth.onAuthStateChange(function (event, session) {
-      console.log("[AUTH EVENT]", event, session);
       if (event === "SIGNED_IN" || event === "INITIAL_SESSION") {
         handleAuthChange(session);
       } else if (event === "SIGNED_OUT") {

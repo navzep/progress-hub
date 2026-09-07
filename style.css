@@ -1,5 +1,15 @@
 /* Progress Hub styles */
 
+/* Guarantee the native [hidden] attribute always wins, regardless of any
+   `display` declared elsewhere on the same element (e.g. .button, flex/grid
+   containers). Without this, an element toggled via el.hidden = true/false
+   in JS can stay visually visible even though the attribute is set
+   correctly, since author `display` rules otherwise override the browser's
+   default [hidden] { display: none } rule. */
+[hidden] {
+  display: none !important;
+}
+
 :root {
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
