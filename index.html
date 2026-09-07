@@ -31,6 +31,7 @@
   <button class="tab-button" data-tab="training" type="button">🏃 Training</button>
   <button class="tab-button" data-tab="races" type="button">🏁 Races</button>
   <button class="tab-button" data-tab="study" type="button">📚 Study</button>
+  <button class="tab-button" data-tab="listening" type="button">🎧 Listening</button>
 </nav>
 
 <main class="app-main">
@@ -165,6 +166,38 @@ Wednesday: Bike 60 min intervals</pre>
       <button id="add-study-topic-btn" class="button button-primary" type="button">+ Add Topic</button>
     </div>
     <div id="study-topics-list" class="card-grid"></div>
+  </section>
+
+  <!-- ===================== LISTENING TAB ===================== -->
+  <section class="tab-section" data-section="listening">
+    <div class="section-header">
+      <h2 class="section-title">Listening</h2>
+      <button id="add-listening-album-btn" class="button button-primary" type="button">+ Add Album</button>
+    </div>
+
+    <div class="form-group filter-group">
+      <label for="listening-status-filter">Filter by status</label>
+      <select id="listening-status-filter">
+        <option value="All">All</option>
+        <option value="To Listen">To Listen</option>
+        <option value="Listening">Listening</option>
+        <option value="Finished">Finished</option>
+        <option value="Revisit">Revisit</option>
+      </select>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Paste Listening List</h3>
+      <textarea id="listening-paste-input" class="plan-paste-textarea" rows="4" placeholder="Paste your listening list here..."></textarea>
+      <button id="parse-listening-btn" class="button button-primary" type="button">Parse &amp; Import</button>
+      <p class="example-label">Expected format:</p>
+      <pre class="example-block">Muddy Waters | Hard Again | To Listen
+B.B. King | Live at the Regal | Finished
+Buddy Guy | Damn Right, I've Got the Blues</pre>
+      <p class="hint-text">Status is optional (defaults to "To Listen"). Importing adds new albums; duplicates (same artist + album) are skipped.</p>
+    </div>
+
+    <div id="listening-list" class="card-grid"></div>
   </section>
 
 </main>

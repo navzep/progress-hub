@@ -22,8 +22,10 @@
   };
   var ATTENTION_DAYS_THRESHOLD = 7;
   var ATTENTION_VISIBLE_CAP = 5;
+  var LISTENING_STATUSES = ["To Listen", "Listening", "Finished", "Revisit"];
 
   var raceFilter = "All";
+  var listeningFilter = "All";
 
   var activeTimer = {
     itemId: null,
@@ -119,6 +121,57 @@
     ];
   }
 
+  function seedListening() {
+    var now = new Date().toISOString();
+    var finished = [
+      ["B.B. King", "Live at the Regal"],
+      ["Albert King", "Born Under a Bad Sign"],
+      ["Stevie Ray Vaughan", "Texas Flood"],
+      ["Freddie King", "Getting Ready..."],
+      ["ZZ Top", "Tres Hombres"],
+    ];
+    var toListen = [
+      ["Muddy Waters", "Hard Again"],
+      ["Buddy Guy", "Damn Right, I've Got the Blues"],
+      ["John Lee Hooker", "It Serve You Right to Suffer"],
+      ["The Allman Brothers Band", "At Fillmore East"],
+      ["Cream", "Disraeli Gears"],
+      ["Gary Moore", "Still Got the Blues"],
+      ["Robin Trower", "Bridge of Sighs"],
+      ["The Black Keys", "Thickfreakness"],
+    ];
+    var albums = [];
+    finished.forEach(function (pair) {
+      albums.push({
+        id: generateId(),
+        artist: pair[0],
+        album: pair[1],
+        status: "Finished",
+        rating: null,
+        favoriteTrack: "",
+        notes: "",
+        dateFinished: "",
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+    toListen.forEach(function (pair) {
+      albums.push({
+        id: generateId(),
+        artist: pair[0],
+        album: pair[1],
+        status: "To Listen",
+        rating: null,
+        favoriteTrack: "",
+        notes: "",
+        dateFinished: "",
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+    return albums;
+  }
+
   // ===================== STATE =====================
 
   function defaultState() {
@@ -127,6 +180,7 @@
       trainingSessions: [],
       races: [],
       studyTopics: [],
+      listening: [],
     };
   }
 
@@ -137,14 +191,22 @@
       trainingSessions: Array.isArray(parsed.trainingSessions) ? parsed.trainingSessions : [],
       races: Array.isArray(parsed.races) ? parsed.races : [],
       studyTopics: Array.isArray(parsed.studyTopics) ? parsed.studyTopics : [],
+      listening: Array.isArray(parsed.listening) ? parsed.listening : [],
     };
   }
 
   function isValidStateShape(parsed) {
     if (!parsed || typeof parsed !== "object") return false;
-    return ["guitarItems", "trainingSessions", "races", "studyTopics"].every(function (key) {
+    var coreOk = ["guitarItems", "trainingSessions", "races", "studyTopics"].every(function (key) {
       return Array.isArray(parsed[key]);
     });
+    if (!coreOk) return false;
+    // "listening" is optional for backward compatibility with exports made
+    // before this module existed — but if present, it must be an array.
+    if (Object.prototype.hasOwnProperty.call(parsed, "listening") && !Array.isArray(parsed.listening)) {
+      return false;
+    }
+    return true;
   }
 
   function loadState() {
@@ -153,11 +215,21 @@
       var seeded = defaultState();
       seeded.guitarItems = seedGuitarItems();
       seeded.races = seedRaces();
+      seeded.listening = seedListening();
       localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded));
       return seeded;
     }
     try {
-      return normalizeState(JSON.parse(raw));
+      var parsed = JSON.parse(raw);
+      var hadListening = parsed && Array.isArray(parsed.listening);
+      var normalized = normalizeState(parsed);
+      if (!hadListening) {
+        // Migration: an existing saved user predating the Listening module.
+        // Add the starter library without touching anything else they saved.
+        normalized.listening = seedListening();
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+      }
+      return normalized;
     } catch (e) {
       return defaultState();
     }
@@ -588,6 +660,22 @@
       nextConfirmedSub = "No confirmed races with a date";
     }
 
+    var currentlyListening = state.listening.find(function (a) {
+      return a.status === "Listening";
+    });
+    var upNextAlbum = state.listening
+      .filter(function (a) {
+        return a.status === "To Listen";
+      })
+      .sort(function (a, b) {
+        return (a.createdAt || "").localeCompare(b.createdAt || "");
+      })[0];
+    var totalFinishedAlbums = state.listening.filter(function (a) {
+      return a.status === "Finished";
+    }).length;
+    var listeningValue = currentlyListening ? currentlyListening.album : "Nothing currently playing";
+    var listeningSub = (upNextAlbum ? "Up next: " + upNextAlbum.album : "Listening queue empty") + " · " + totalFinishedAlbums + " finished";
+
     var cards = [
       {
         tab: "guitar",
@@ -623,6 +711,13 @@
         label: "Study Topics",
         value: String(state.studyTopics.length),
         sub: "Avg confidence " + avgConfidence(state.studyTopics),
+      },
+      {
+        tab: "listening",
+        color: "listening",
+        label: "Listening",
+        value: listeningValue,
+        sub: listeningSub,
       },
     ];
 
@@ -1473,6 +1568,251 @@
     );
   }
 
+  // ===================== LISTENING =====================
+
+  function ratingStarsHtml(rating) {
+    var r = Number(rating);
+    if (!r) return "";
+    return "★".repeat(r) + "☆".repeat(5 - r);
+  }
+
+  function listeningBadgeClass(status) {
+    return "badge-" + String(status).toLowerCase().replace(/\s+/g, "-");
+  }
+
+  function listeningDupKey(artist, album) {
+    return (artist || "").trim().toLowerCase() + " " + (album || "").trim().toLowerCase();
+  }
+
+  function renderListening() {
+    var el = document.getElementById("listening-list");
+    var filtered = state.listening.filter(function (a) {
+      return listeningFilter === "All" || a.status === listeningFilter;
+    });
+
+    if (!filtered.length) {
+      el.innerHTML = '<div class="empty-state">No albums' + (listeningFilter !== "All" ? ' with status "' + escapeHtml(listeningFilter) + '"' : "") + " yet.</div>";
+      return;
+    }
+
+    var sorted = filtered.slice().sort(function (a, b) {
+      return (b.updatedAt || "").localeCompare(a.updatedAt || "");
+    });
+
+    el.innerHTML = sorted
+      .map(function (a) {
+        return (
+          '<div class="item-card" data-id="' + a.id + '">' +
+          '<div class="item-card-header">' +
+          '<div>' +
+          '<div class="item-card-title">' + escapeHtml(a.album) + "</div>" +
+          '<div class="item-card-meta">' + escapeHtml(a.artist) + "</div>" +
+          "</div>" +
+          '<span class="badge ' + listeningBadgeClass(a.status) + '">' + escapeHtml(a.status) + "</span>" +
+          "</div>" +
+          (a.rating ? '<div class="rating-stars">' + ratingStarsHtml(a.rating) + "</div>" : "") +
+          (a.favoriteTrack ? '<div class="item-card-meta">🎵 ' + escapeHtml(a.favoriteTrack) + "</div>" : "") +
+          (a.status === "Finished" && a.dateFinished ? '<div class="item-card-meta">Finished: ' + formatDateNice(a.dateFinished) + "</div>" : "") +
+          (a.notes ? '<div class="item-card-notes">' + escapeHtml(a.notes) + "</div>" : "") +
+          '<div class="item-card-actions">' +
+          '<button class="button button-secondary button-small" data-edit-listening="' + a.id + '" type="button">Edit</button>' +
+          '<button class="button button-danger button-small" data-delete-listening="' + a.id + '" type="button">Delete</button>' +
+          "</div>" +
+          "</div>"
+        );
+      })
+      .join("");
+
+    el.querySelectorAll("[data-edit-listening]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        openListeningModal(btn.getAttribute("data-edit-listening"));
+      });
+    });
+    el.querySelectorAll("[data-delete-listening]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-delete-listening");
+        if (!confirm("Delete this album?")) return;
+        state.listening = state.listening.filter(function (a) {
+          return a.id !== id;
+        });
+        saveState();
+        renderAll();
+        showToast("Album deleted");
+      });
+    });
+  }
+
+  function listeningRatingOptionsHtml(currentRating) {
+    var current = currentRating ? Number(currentRating) : null;
+    var options = ['<option value=""' + (!current ? " selected" : "") + ">Not Rated</option>"];
+    for (var i = 1; i <= 5; i++) {
+      options.push('<option value="' + i + '"' + (current === i ? " selected" : "") + ">" + i + "</option>");
+    }
+    return options.join("");
+  }
+
+  function listeningFieldsHtml(album) {
+    album = album || { artist: "", album: "", status: "To Listen", rating: null, favoriteTrack: "", notes: "", dateFinished: "" };
+    return (
+      '<div class="form-group">' +
+      '<label for="lf-artist">Artist</label>' +
+      '<input id="lf-artist" name="artist" type="text" required value="' + escapeHtml(album.artist) + '">' +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="lf-album">Album</label>' +
+      '<input id="lf-album" name="album" type="text" required value="' + escapeHtml(album.album) + '">' +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="lf-status">Status</label>' +
+      '<select id="lf-status" name="status">' +
+      LISTENING_STATUSES.map(function (s) {
+        return '<option value="' + s + '"' + (album.status === s ? " selected" : "") + ">" + s + "</option>";
+      }).join("") +
+      "</select>" +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="lf-rating">Rating</label>' +
+      '<select id="lf-rating" name="rating">' + listeningRatingOptionsHtml(album.rating) + "</select>" +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="lf-favorite">Favorite Track</label>' +
+      '<input id="lf-favorite" name="favoriteTrack" type="text" placeholder="e.g. track name" value="' + escapeHtml(album.favoriteTrack) + '">' +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="lf-notes">Notes / Reaction</label>' +
+      '<textarea id="lf-notes" name="notes" rows="3">' + escapeHtml(album.notes) + "</textarea>" +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="lf-date-finished">Date Finished</label>' +
+      '<input id="lf-date-finished" name="dateFinished" type="date" value="' + escapeHtml(album.dateFinished) + '">' +
+      "</div>"
+    );
+  }
+
+  function openListeningModal(id) {
+    var album = id ? state.listening.find(function (a) { return a.id === id; }) : null;
+    openModal(album ? "Edit Album" : "Add Album", listeningFieldsHtml(album), function (formData) {
+      var ratingRaw = formData.get("rating");
+      var data = {
+        artist: formData.get("artist").trim(),
+        album: formData.get("album").trim(),
+        status: formData.get("status"),
+        rating: ratingRaw ? Number(ratingRaw) : null,
+        favoriteTrack: formData.get("favoriteTrack").trim(),
+        notes: formData.get("notes").trim(),
+        dateFinished: formData.get("dateFinished") || "",
+        updatedAt: new Date().toISOString(),
+      };
+      if (!data.artist || !data.album) return;
+      // Auto-default Date Finished to today when moving to Finished with no
+      // date set yet — but never overwrite a date that's already there.
+      if (data.status === "Finished" && !data.dateFinished) {
+        data.dateFinished = todayISO();
+      }
+      if (album) {
+        data.createdAt = album.createdAt || album.updatedAt || data.updatedAt;
+        Object.assign(album, data);
+      } else {
+        data.id = generateId();
+        data.createdAt = data.updatedAt;
+        state.listening.push(data);
+      }
+      saveState();
+      renderAll();
+      closeModal();
+      showToast(album ? "Album updated" : "Album added");
+    });
+  }
+
+  function initListeningFilter() {
+    document.getElementById("listening-status-filter").addEventListener("change", function (e) {
+      listeningFilter = e.target.value;
+      renderListening();
+    });
+  }
+
+  function parseListeningPasteText(text) {
+    var lines = text
+      .split("\n")
+      .map(function (l) {
+        return l.trim();
+      })
+      .filter(Boolean);
+    var albums = [];
+    var invalidStatusCount = 0;
+    lines.forEach(function (line) {
+      var parts = line.split("|").map(function (p) {
+        return p.trim();
+      });
+      if (parts.length < 2) return;
+      var artist = parts[0];
+      var albumTitle = parts[1];
+      if (!artist || !albumTitle) return;
+
+      var statusRaw = parts[2] || "";
+      var status = "To Listen";
+      if (statusRaw) {
+        if (LISTENING_STATUSES.indexOf(statusRaw) !== -1) {
+          status = statusRaw;
+        } else {
+          invalidStatusCount++;
+        }
+      }
+      albums.push({ artist: artist, album: albumTitle, status: status });
+    });
+    return { albums: albums, invalidStatusCount: invalidStatusCount };
+  }
+
+  function initListeningPasteImporter() {
+    document.getElementById("parse-listening-btn").addEventListener("click", function () {
+      var textarea = document.getElementById("listening-paste-input");
+      var result = parseListeningPasteText(textarea.value);
+      if (!result.albums.length) {
+        showToast("No albums found. Check the format.");
+        return;
+      }
+
+      var existingKeys = {};
+      state.listening.forEach(function (a) {
+        existingKeys[listeningDupKey(a.artist, a.album)] = true;
+      });
+
+      var now = new Date().toISOString();
+      var added = 0;
+      var duplicates = 0;
+      result.albums.forEach(function (a) {
+        var key = listeningDupKey(a.artist, a.album);
+        if (existingKeys[key]) {
+          duplicates++;
+          return;
+        }
+        existingKeys[key] = true;
+        state.listening.push({
+          id: generateId(),
+          artist: a.artist,
+          album: a.album,
+          status: a.status,
+          rating: null,
+          favoriteTrack: "",
+          notes: "",
+          dateFinished: a.status === "Finished" ? todayISO() : "",
+          createdAt: now,
+          updatedAt: now,
+        });
+        added++;
+      });
+
+      saveState();
+      textarea.value = "";
+      renderAll();
+
+      var msg = result.albums.length + " album(s) detected — " + added + " imported";
+      if (duplicates > 0) msg += ", " + duplicates + " duplicate(s) skipped";
+      if (result.invalidStatusCount > 0) msg += ", " + result.invalidStatusCount + " unrecognized status defaulted to To Listen";
+      showToast(msg);
+    });
+  }
+
   // ===================== IMPORT / EXPORT =====================
 
   function initDataButtons() {
@@ -1541,6 +1881,9 @@
     document.getElementById("add-study-topic-btn").addEventListener("click", function () {
       openStudyModal(null);
     });
+    document.getElementById("add-listening-album-btn").addEventListener("click", function () {
+      openListeningModal(null);
+    });
   }
 
   // ===================== RENDER ALL =====================
@@ -1551,6 +1894,7 @@
     renderTraining();
     renderRaces();
     renderStudy();
+    renderListening();
   }
 
   // ===================== INIT =====================
@@ -1563,6 +1907,8 @@
     initTrainingForm();
     initPlanParser();
     initRaceFilter();
+    initListeningFilter();
+    initListeningPasteImporter();
     initDataButtons();
     initGlobalTimerControls();
     renderAll();
