@@ -2278,12 +2278,16 @@
         // skip the local UI update either — the user's intent to sign out
         // should always be reflected immediately regardless of network
         // outcome, rather than only showing up after a later reload.
+        console.log("[ph-debug] sign-out clicked, currentUser=", currentUser);
         try {
           await supabaseClient.auth.signOut();
+          console.log("[ph-debug] signOut() resolved");
         } catch (e) {
-          /* fall through — still reflect signed-out state locally below */
+          console.log("[ph-debug] signOut() threw:", e);
         }
+        console.log("[ph-debug] calling handleAuthChange(null)");
         handleAuthChange(null);
+        console.log("[ph-debug] after handleAuthChange(null), currentUser=", currentUser, "sign-in-btn.hidden=", document.getElementById("sign-in-btn").hidden);
       });
     }
 
