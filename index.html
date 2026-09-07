@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Progress Hub</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-theme="dark">
+
+<!-- ===================== HEADER ===================== -->
+<header class="app-header">
+  <h1 class="app-title">Progress Hub</h1>
+  <button id="theme-toggle-btn" class="icon-button" type="button" title="Toggle light/dark theme">🌙</button>
+</header>
+
+<!-- ===================== TAB BAR ===================== -->
+<nav class="tab-bar">
+  <button class="tab-button active" data-tab="dashboard" type="button">Dashboard</button>
+  <button class="tab-button" data-tab="guitar" type="button">Guitar</button>
+  <button class="tab-button" data-tab="training" type="button">Training</button>
+  <button class="tab-button" data-tab="races" type="button">Races</button>
+  <button class="tab-button" data-tab="study" type="button">Study</button>
+</nav>
+
+<main class="app-main">
+
+  <!-- ===================== DASHBOARD TAB ===================== -->
+  <section class="tab-section active" data-section="dashboard">
+    <div id="dashboard-content" class="dashboard-grid"></div>
+
+    <div class="card data-card">
+      <h2 class="card-title">Data</h2>
+      <p class="card-subtext">Export your data to move it between devices, or import a previously exported file.</p>
+      <div class="button-row">
+        <button id="export-data-btn" class="button button-secondary" type="button">⬇ Export Data</button>
+        <button id="import-data-btn" class="button button-secondary" type="button">⬆ Import Data</button>
+        <input id="import-data-input" type="file" accept="application/json" hidden>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== GUITAR TAB ===================== -->
+  <section class="tab-section" data-section="guitar">
+    <div class="section-header">
+      <h2 class="section-title">Guitar</h2>
+      <button id="add-guitar-item-btn" class="button button-primary" type="button">+ Add Item</button>
+    </div>
+
+    <div class="card timer-card">
+      <h3 class="card-title">Practice Timer</h3>
+      <div id="guitar-timer-display" class="timer-display">00:00</div>
+      <div class="timer-controls button-row">
+        <button id="timer-start-btn" class="button button-primary" type="button">▶ Start</button>
+        <button id="timer-pause-btn" class="button button-secondary" type="button" disabled>⏸ Pause</button>
+        <button id="timer-reset-btn" class="button button-secondary" type="button">↺ Reset</button>
+      </div>
+      <p id="timer-total-label" class="hint-text"></p>
+    </div>
+
+    <div id="guitar-items-list" class="card-grid"></div>
+  </section>
+
+  <!-- ===================== TRAINING TAB ===================== -->
+  <section class="tab-section" data-section="training">
+    <div class="section-header">
+      <h2 class="section-title">Training</h2>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Add a Session</h3>
+      <form id="add-session-form" class="stacked-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="session-date-input">Date</label>
+            <input id="session-date-input" type="date" required>
+          </div>
+          <div class="form-group">
+            <label for="session-sport-input">Sport</label>
+            <select id="session-sport-input">
+              <option>Swim</option>
+              <option>Bike</option>
+              <option>Run</option>
+              <option>Strength</option>
+              <option>Mobility</option>
+              <option>Recovery</option>
+              <option>Other</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="session-title-input">Title</label>
+            <input id="session-title-input" type="text" placeholder="e.g. Tempo run" required>
+          </div>
+          <div class="form-group">
+            <label for="session-duration-input">Duration</label>
+            <input id="session-duration-input" type="text" placeholder="e.g. 45 min">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="session-notes-input">Notes</label>
+          <textarea id="session-notes-input" rows="2"></textarea>
+        </div>
+        <label class="checkbox-label">
+          <input id="session-completed-input" type="checkbox">
+          Completed
+        </label>
+        <button type="submit" class="button button-primary">Add Session</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Paste a Weekly Plan</h3>
+      <textarea id="plan-paste-input" class="plan-paste-textarea" rows="4" placeholder="Paste your weekly plan here..."></textarea>
+      <button id="parse-plan-btn" class="button button-primary" type="button">Parse &amp; Import</button>
+      <p class="example-label">Expected format:</p>
+      <pre class="example-block">Monday: Swim 45 min easy technique
+Tuesday: Run 5 km tempo
+Wednesday: Bike 60 min intervals</pre>
+      <p class="hint-text">Importing adds new sessions; it won't remove existing ones.</p>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">This Week</h3>
+      <div id="training-stats" class="stats-row"></div>
+    </div>
+
+    <div id="training-sessions-list" class="sessions-list"></div>
+  </section>
+
+  <!-- ===================== RACES TAB ===================== -->
+  <section class="tab-section" data-section="races">
+    <div class="section-header">
+      <h2 class="section-title">Races</h2>
+      <button id="add-race-btn" class="button button-primary" type="button">+ Add Race</button>
+    </div>
+    <div class="form-group filter-group">
+      <label for="race-status-filter">Filter by status</label>
+      <select id="race-status-filter">
+        <option value="All">All</option>
+        <option value="Confirmed">Confirmed</option>
+        <option value="Tentative">Tentative</option>
+        <option value="Bucket List">Bucket List</option>
+        <option value="Completed">Completed</option>
+      </select>
+    </div>
+    <div id="races-list" class="card-grid"></div>
+  </section>
+
+  <!-- ===================== STUDY TAB ===================== -->
+  <section class="tab-section" data-section="study">
+    <div class="section-header">
+      <h2 class="section-title">Study</h2>
+      <button id="add-study-topic-btn" class="button button-primary" type="button">+ Add Topic</button>
+    </div>
+    <div id="study-topics-list" class="card-grid"></div>
+  </section>
+
+</main>
+
+<!-- ===================== SHARED MODAL (add/edit forms) ===================== -->
+<div id="modal-overlay" class="modal-overlay" hidden>
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="modal-title">Add Item</h3>
+      <button id="modal-close-btn" class="icon-button" type="button" title="Close">✕</button>
+    </div>
+    <form id="modal-form" class="stacked-form"></form>
+  </div>
+</div>
+
+<!-- ===================== SHARED TOAST ===================== -->
+<div id="toast" class="toast" hidden></div>
+
+<!-- ===================== SHARED DATALISTS ===================== -->
+<datalist id="guitar-type-suggestions">
+  <option value="Song"></option>
+  <option value="Scale"></option>
+  <option value="Chord Progression"></option>
+  <option value="Technique"></option>
+  <option value="Improvisation"></option>
+  <option value="Other"></option>
+</datalist>
+<datalist id="guitar-status-suggestions">
+  <option value="In Progress"></option>
+  <option value="Nearly There"></option>
+  <option value="Rhythm solid"></option>
+  <option value="Maintenance"></option>
+</datalist>
+
+<script src="script.js"></script>
+</body>
+</html>
