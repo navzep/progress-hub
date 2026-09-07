@@ -1873,7 +1873,6 @@
 
   function updateAccountUI() {
     var signInBtn = document.getElementById("sign-in-btn");
-    var signOutBtn = document.getElementById("sign-out-btn");
     var accountIndicator = document.getElementById("account-indicator");
     var accountEmail = document.getElementById("account-email");
     if (!signInBtn || !accountIndicator || !accountEmail) return;
@@ -1886,17 +1885,6 @@
       accountIndicator.hidden = true;
       setSyncStatus("offline");
     }
-    console.log(
-      "[RENDER-DEBUG] signInBtn.hidden=" + signInBtn.hidden + " display=" + window.getComputedStyle(signInBtn).display
-    );
-    if (signOutBtn) {
-      console.log(
-        "[RENDER-DEBUG] signOutBtn.hidden=" + signOutBtn.hidden + " display=" + window.getComputedStyle(signOutBtn).display
-      );
-    }
-    console.log(
-      "[RENDER-DEBUG] accountIndicator.hidden=" + accountIndicator.hidden + " display=" + window.getComputedStyle(accountIndicator).display
-    );
   }
 
   async function fetchCloudRow(userId) {
