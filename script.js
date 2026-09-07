@@ -11,6 +11,15 @@
   var GUITAR_STATUSES = ["Learning", "In Progress", "Rhythm solid", "Nearly There", "Maintenance"];
   var DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
   var SPORT_NAMES = ["Swim", "Bike", "Run", "Strength", "Mobility", "Recovery"];
+  var SPORT_META = {
+    Swim: { icon: "🏊", color: "#0891b2" },
+    Bike: { icon: "🚴", color: "#16a34a" },
+    Run: { icon: "🏃", color: "#ea580c" },
+    Strength: { icon: "🏋", color: "#dc2626" },
+    Mobility: { icon: "🧘", color: "#7c3aed" },
+    Recovery: { icon: "😴", color: "#64748b" },
+    Other: { icon: "⚡", color: "#2563eb" },
+  };
   var ATTENTION_DAYS_THRESHOLD = 7;
   var ATTENTION_VISIBLE_CAP = 5;
 
@@ -197,6 +206,50 @@
     if (!iso) return "";
     var d = localDateFromISO(iso);
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  }
+
+  function formatDateWithWeekday(iso) {
+    if (!iso) return "";
+    var d = localDateFromISO(iso);
+    return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+  }
+
+  function getSportMeta(sport) {
+    return SPORT_META[sport] || SPORT_META.Other;
+  }
+
+  function parseDurationToMinutes(str) {
+    if (!str) return null;
+    var total = 0;
+    var found = false;
+    var hourMatch = str.match(/(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b/i);
+    if (hourMatch) {
+      total += parseFloat(hourMatch[1]) * 60;
+      found = true;
+    }
+    var minMatch = str.match(/(\d+(?:\.\d+)?)\s*(?:minutes?|mins?)\b/i);
+    if (minMatch) {
+      total += parseFloat(minMatch[1]);
+      found = true;
+    }
+    if (!found) {
+      var bare = str.match(/^\s*(\d+(?:\.\d+)?)\s*$/);
+      if (bare) {
+        total += parseFloat(bare[1]);
+        found = true;
+      }
+    }
+    return found ? total : null;
+  }
+
+  function formatDurationMinutes(mins) {
+    if (mins == null) return null;
+    mins = Math.round(mins);
+    var h = Math.floor(mins / 60);
+    var m = mins % 60;
+    if (h > 0 && m > 0) return h + "h " + m + "m";
+    if (h > 0) return h + "h";
+    return m + "m";
   }
 
   function daysBetween(aIso, bIso) {
@@ -399,6 +452,50 @@
     return items;
   }
 
+  function renderTodayTrainingCard() {
+    var section = document.querySelector('.tab-section[data-section="dashboard"]');
+    if (!section) return;
+    var card = document.getElementById("dashboard-today-training");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "dashboard-today-training";
+      card.className = "card";
+      var dataCard = section.querySelector(".data-card");
+      section.insertBefore(card, dataCard);
+    }
+
+    var today = todayISO();
+    var todaySessions = state.trainingSessions.filter(function (s) {
+      return s.date === today;
+    });
+
+    var bodyHtml;
+    if (!todaySessions.length) {
+      bodyHtml = '<p class="card-subtext">No training planned today.</p>';
+    } else {
+      bodyHtml =
+        '<div class="sessions-list">' +
+        todaySessions
+          .map(function (s) {
+            var meta = getSportMeta(s.sport);
+            return (
+              '<div class="session-row' + (s.completed ? " completed" : "") + '" style="border-left: 4px solid ' + meta.color + '">' +
+              '<span class="session-sport-icon" title="' + escapeHtml(s.sport) + '">' + meta.icon + "</span>" +
+              '<div class="session-row-main">' +
+              '<div class="session-row-title">' + escapeHtml(s.title) + "</div>" +
+              '<div class="session-row-meta">' + escapeHtml(s.sport) + (s.duration ? " · " + escapeHtml(s.duration) : "") + "</div>" +
+              "</div>" +
+              '<span class="badge ' + (s.completed ? "badge-completed" : "") + '">' + (s.completed ? "Completed" : "Pending") + "</span>" +
+              "</div>"
+            );
+          })
+          .join("") +
+        "</div>";
+    }
+
+    card.innerHTML = '<h3 class="card-title">Today’s Training</h3>' + bodyHtml;
+  }
+
   function renderAttentionCard() {
     var section = document.querySelector('.tab-section[data-section="dashboard"]');
     if (!section) return;
@@ -530,6 +627,7 @@
       });
     });
 
+    renderTodayTrainingCard();
     renderAttentionCard();
   }
 
@@ -903,10 +1001,22 @@
       })
       .join(", ");
 
+    var totalPlannedMinutes = null;
+    var hasParseableDuration = false;
+    weekSessions.forEach(function (s) {
+      var mins = parseDurationToMinutes(s.duration);
+      if (mins != null) {
+        hasParseableDuration = true;
+        totalPlannedMinutes = (totalPlannedMinutes || 0) + mins;
+      }
+    });
+    var totalPlannedLabel = hasParseableDuration ? formatDurationMinutes(totalPlannedMinutes) : "—";
+
     el.innerHTML =
       '<div class="stat-pill"><strong>' + weekSessions.length + "</strong>planned this week</div>" +
       '<div class="stat-pill"><strong>' + completed + " / " + weekSessions.length + " (" + pct + "%)</strong>completed this week</div>" +
-      '<div class="stat-pill"><strong>' + (sportSummary || "—") + "</strong>by sport this week</div>";
+      '<div class="stat-pill"><strong>' + (sportSummary || "—") + "</strong>by sport this week</div>" +
+      '<div class="stat-pill"><strong>' + totalPlannedLabel + "</strong>total planned time this week</div>";
   }
 
   function renderTrainingSessions() {
@@ -922,14 +1032,17 @@
 
     el.innerHTML = sorted
       .map(function (s) {
+        var meta = getSportMeta(s.sport);
         return (
-          '<div class="session-row' + (s.completed ? " completed" : "") + '" data-id="' + s.id + '">' +
+          '<div class="session-row' + (s.completed ? " completed" : "") + '" data-id="' + s.id + '" style="border-left: 4px solid ' + meta.color + '">' +
           '<input type="checkbox" data-toggle-session="' + s.id + '" ' + (s.completed ? "checked" : "") + ">" +
+          '<span class="session-sport-icon" title="' + escapeHtml(s.sport) + '">' + meta.icon + "</span>" +
           '<div class="session-row-main">' +
           '<div class="session-row-title">' + escapeHtml(s.title) + "</div>" +
-          '<div class="session-row-meta">' + formatDateNice(s.date) + " · " + escapeHtml(s.sport) + (s.duration ? " · " + escapeHtml(s.duration) : "") + "</div>" +
+          '<div class="session-row-meta">' + formatDateWithWeekday(s.date) + " · " + escapeHtml(s.sport) + (s.duration ? " · " + escapeHtml(s.duration) : "") + "</div>" +
           (s.notes ? '<div class="session-row-meta">' + escapeHtml(s.notes) + "</div>" : "") +
           "</div>" +
+          '<span class="badge ' + (s.completed ? "badge-completed" : "") + '">' + (s.completed ? "Completed" : "Pending") + "</span>" +
           '<div class="session-row-actions">' +
           '<button class="button button-danger button-small" data-delete-session="' + s.id + '" type="button">Delete</button>' +
           "</div>" +

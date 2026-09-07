@@ -645,6 +645,12 @@ textarea {
   opacity: 0.6;
 }
 
+.session-sport-icon {
+  flex: 0 0 auto;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
 .session-row-main {
   flex: 1;
   min-width: 0;
