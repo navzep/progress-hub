@@ -1873,6 +1873,7 @@
 
   function updateAccountUI() {
     var signInBtn = document.getElementById("sign-in-btn");
+    var signOutBtn = document.getElementById("sign-out-btn");
     var accountIndicator = document.getElementById("account-indicator");
     var accountEmail = document.getElementById("account-email");
     if (!signInBtn || !accountIndicator || !accountEmail) return;
@@ -1885,6 +1886,17 @@
       accountIndicator.hidden = true;
       setSyncStatus("offline");
     }
+    console.log(
+      "[RENDER-DEBUG] signInBtn.hidden=" + signInBtn.hidden + " display=" + window.getComputedStyle(signInBtn).display
+    );
+    if (signOutBtn) {
+      console.log(
+        "[RENDER-DEBUG] signOutBtn.hidden=" + signOutBtn.hidden + " display=" + window.getComputedStyle(signOutBtn).display
+      );
+    }
+    console.log(
+      "[RENDER-DEBUG] accountIndicator.hidden=" + accountIndicator.hidden + " display=" + window.getComputedStyle(accountIndicator).display
+    );
   }
 
   async function fetchCloudRow(userId) {
@@ -2273,17 +2285,14 @@
 
     if (signOutBtn) {
       signOutBtn.addEventListener("click", async function () {
-        // Don't rely solely on onAuthStateChange's SIGNED_OUT event to
-        // update the UI, and don't let a rejected/erroring signOut() call
-        // skip the local UI update either — the user's intent to sign out
-        // should always be reflected immediately regardless of network
-        // outcome, rather than only showing up after a later reload.
+        // onAuthStateChange (below) is the single source of truth for the
+        // SIGNED_OUT transition and already updates the UI — this handler
+        // only triggers the sign-out and surfaces an error if it fails.
         try {
           await supabaseClient.auth.signOut();
         } catch (e) {
-          /* fall through — still reflect signed-out state locally below */
+          showToast("Sign out failed — check your connection and try again.");
         }
-        handleAuthChange(null);
       });
     }
 
