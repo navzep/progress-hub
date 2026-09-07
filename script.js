@@ -477,30 +477,35 @@
     var cards = [
       {
         tab: "guitar",
+        color: "guitar",
         label: "Guitar Items",
         value: String(state.guitarItems.length),
         sub: "Avg confidence " + avgConfidence(state.guitarItems),
       },
       {
         tab: "training",
+        color: "training",
         label: "This Week",
         value: weekCompleted + " / " + weekSessions.length + " (" + weekPct + "%)",
         sub: "sessions completed",
       },
       {
         tab: "races",
+        color: "race-pipeline",
         label: "Race Pipeline",
         value: raceCounts.Confirmed + " Confirmed",
         sub: raceCounts.Tentative + " Tentative · " + raceCounts["Bucket List"] + " Bucket List · " + raceCounts.Completed + " Completed",
       },
       {
         tab: "races",
+        color: "next-race",
         label: "Next Confirmed Race",
         value: nextConfirmed ? nextConfirmed.name : "None",
         sub: nextConfirmedSub,
       },
       {
         tab: "study",
+        color: "study",
         label: "Study Topics",
         value: String(state.studyTopics.length),
         sub: "Avg confidence " + avgConfidence(state.studyTopics),
@@ -510,7 +515,7 @@
     el.innerHTML = cards
       .map(function (c) {
         return (
-          '<button type="button" class="stat-card" data-goto="' + c.tab + '">' +
+          '<button type="button" class="stat-card" data-goto="' + c.tab + '" data-color="' + c.color + '">' +
           '<div class="stat-card-label">' + escapeHtml(c.label) + "</div>" +
           '<div class="stat-card-value">' + escapeHtml(c.value) + "</div>" +
           '<div class="stat-card-sub">' + escapeHtml(c.sub) + "</div>" +
