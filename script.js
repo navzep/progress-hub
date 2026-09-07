@@ -2083,15 +2083,29 @@
     }
   }
 
-  async function sendMagicLink(email) {
+  var AUTH_MIN_PASSWORD_LENGTH = 6;
+
+  function validateAuthInput(email, password) {
+    if (!email) return "Enter your email.";
+    if (!password) return "Enter your password.";
+    if (password.length < AUTH_MIN_PASSWORD_LENGTH) {
+      return "Password must be at least " + AUTH_MIN_PASSWORD_LENGTH + " characters.";
+    }
+    return null;
+  }
+
+  function setAuthButtonBusy(btn, busy, label) {
+    if (!btn) return;
+    btn.disabled = busy;
+    btn.textContent = label;
+  }
+
+  async function signInWithPassword(email, password) {
     if (!supabaseClient) {
       return { ok: false, error: "Cloud sync isn't available right now (couldn't load Supabase)." };
     }
     try {
-      var result = await supabaseClient.auth.signInWithOtp({
-        email: email,
-        options: { emailRedirectTo: window.location.href },
-      });
+      var result = await supabaseClient.auth.signInWithPassword({ email: email, password: password });
       if (result.error) return { ok: false, error: result.error.message };
       return { ok: true };
     } catch (e) {
@@ -2099,45 +2113,126 @@
     }
   }
 
+  async function signUpWithPassword(email, password) {
+    if (!supabaseClient) {
+      return { ok: false, error: "Cloud sync isn't available right now (couldn't load Supabase)." };
+    }
+    try {
+      var result = await supabaseClient.auth.signUp({
+        email: email,
+        password: password,
+        options: { emailRedirectTo: window.location.href },
+      });
+      if (result.error) return { ok: false, error: result.error.message };
+
+      // Supabase deliberately returns a fake "success" (no error, no session)
+      // for an email that's already registered, to avoid leaking which
+      // emails have accounts. It signals this via an empty identities array
+      // on the returned user — detect that so we don't tell an existing user
+      // "Account created!".
+      var user = result.data && result.data.user;
+      var alreadyRegistered = !!(user && Array.isArray(user.identities) && user.identities.length === 0);
+      if (alreadyRegistered) {
+        return { ok: false, error: "An account with this email already exists. Try signing in instead." };
+      }
+
+      // If the project requires email confirmation, signUp succeeds but no
+      // session is returned yet (and no SIGNED_IN event will fire) until the
+      // confirmation link is clicked.
+      var needsConfirmation = !(result.data && result.data.session);
+      return { ok: true, needsConfirmation: needsConfirmation };
+    } catch (e) {
+      return { ok: false, error: "Network error — check your connection and try again." };
+    }
+  }
+
   function openSignInModal() {
+    // Shared across the Sign In submit handler and the Create Account click
+    // handler below, so the two mutually exclusive actions can't both be
+    // in flight at once and race to overwrite auth-status-msg / each other's
+    // button state.
+    var authBusy = false;
+
     var fieldsHtml =
       '<div class="form-group">' +
       '<label for="auth-email">Email</label>' +
-      '<input id="auth-email" name="email" type="email" placeholder="you@example.com" required>' +
+      '<input id="auth-email" name="email" type="email" placeholder="you@example.com" required autocomplete="email">' +
       "</div>" +
-      '<p class="hint-text">We’ll email you a magic link — no password needed.</p>' +
+      '<div class="form-group">' +
+      '<label for="auth-password">Password</label>' +
+      '<input id="auth-password" name="password" type="password" placeholder="••••••••" required minlength="' + AUTH_MIN_PASSWORD_LENGTH + '" autocomplete="current-password">' +
+      "</div>" +
+      '<p class="hint-text">At least ' + AUTH_MIN_PASSWORD_LENGTH + " characters.</p>" +
       '<p id="auth-status-msg" class="hint-text"></p>' +
+      '<div class="button-row">' +
+      '<button id="signup-btn" class="button button-secondary" type="button">Create Account</button>' +
+      "</div>" +
       '<p class="hint-text">Don’t want an account? Just close this — Progress Hub keeps working on this device only, and your data won’t sync anywhere.</p>';
 
-    // Uses the standard form-submit pattern (like every other modal in the
-    // app) rather than a bare button click handler, so pressing Enter in the
-    // email field submits it naturally instead of silently doing nothing.
+    // Sign In uses the standard form-submit pattern (like every other modal
+    // in the app), so pressing Enter after typing the password submits it
+    // naturally. Create Account is a secondary explicit button — signing up
+    // and signing in are different actions and shouldn't share one trigger.
     openModal(
       "Sign In",
       fieldsHtml,
       async function (formData, formEl) {
+        if (authBusy) return;
         var email = formData.get("email").trim();
+        var password = formData.get("password");
         var statusMsg = formEl.querySelector("#auth-status-msg");
-        if (!email) {
-          if (statusMsg) statusMsg.textContent = "Enter your email first.";
+        var validationError = validateAuthInput(email, password);
+        if (validationError) {
+          if (statusMsg) statusMsg.textContent = validationError;
           return;
         }
         var submitBtn = formEl.querySelector('button[type="submit"]');
-        if (submitBtn) {
-          submitBtn.disabled = true;
-          submitBtn.textContent = "Sending…";
-        }
-        var result = await sendMagicLink(email);
-        if (submitBtn) {
-          submitBtn.disabled = false;
-          submitBtn.textContent = "Send Magic Link";
-        }
-        if (statusMsg) {
-          statusMsg.textContent = result.ok ? "Check your email for the sign-in link!" : "Error: " + result.error;
-        }
+        var signUpBtn = formEl.querySelector("#signup-btn");
+        authBusy = true;
+        setAuthButtonBusy(submitBtn, true, "Signing in…");
+        setAuthButtonBusy(signUpBtn, true, "Create Account");
+        var result = await signInWithPassword(email, password);
+        authBusy = false;
+        setAuthButtonBusy(submitBtn, false, "Sign In");
+        setAuthButtonBusy(signUpBtn, false, "Create Account");
+        if (statusMsg) statusMsg.textContent = result.ok ? "" : "Error: " + result.error;
+        // On success, onAuthStateChange fires SIGNED_IN and handleAuthChange
+        // closes this modal itself — nothing further needed here.
       },
-      null,
-      { saveLabel: "Send Magic Link" }
+      function (form) {
+        var signUpBtn = form.querySelector("#signup-btn");
+        signUpBtn.addEventListener("click", async function () {
+          if (authBusy) return;
+          var email = form.querySelector("#auth-email").value.trim();
+          var password = form.querySelector("#auth-password").value;
+          var statusMsg = form.querySelector("#auth-status-msg");
+          var submitBtn = form.querySelector('button[type="submit"]');
+          var validationError = validateAuthInput(email, password);
+          if (validationError) {
+            if (statusMsg) statusMsg.textContent = validationError;
+            return;
+          }
+          authBusy = true;
+          setAuthButtonBusy(signUpBtn, true, "Creating…");
+          setAuthButtonBusy(submitBtn, true, "Sign In");
+          var result = await signUpWithPassword(email, password);
+          authBusy = false;
+          setAuthButtonBusy(signUpBtn, false, "Create Account");
+          setAuthButtonBusy(submitBtn, false, "Sign In");
+          if (!result.ok) {
+            if (statusMsg) statusMsg.textContent = "Error: " + result.error;
+            return;
+          }
+          if (statusMsg) {
+            statusMsg.textContent = result.needsConfirmation
+              ? "Account created! Check your email to confirm it, then sign in above."
+              : "Account created — signing you in…";
+          }
+          // If confirmation isn't required, onAuthStateChange fires SIGNED_IN
+          // and handleAuthChange takes it from here (closes modal, syncs).
+        });
+      },
+      { saveLabel: "Sign In" }
     );
   }
 
