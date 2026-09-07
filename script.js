@@ -2274,10 +2274,15 @@
     if (signOutBtn) {
       signOutBtn.addEventListener("click", async function () {
         // Don't rely solely on onAuthStateChange's SIGNED_OUT event to
-        // update the UI — force it the moment signOut() resolves, so the
-        // header reflects the change immediately rather than only after
-        // a later reload.
-        await supabaseClient.auth.signOut();
+        // update the UI, and don't let a rejected/erroring signOut() call
+        // skip the local UI update either — the user's intent to sign out
+        // should always be reflected immediately regardless of network
+        // outcome, rather than only showing up after a later reload.
+        try {
+          await supabaseClient.auth.signOut();
+        } catch (e) {
+          /* fall through — still reflect signed-out state locally below */
+        }
         handleAuthChange(null);
       });
     }
