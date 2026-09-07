@@ -21,7 +21,18 @@
 <!-- ===================== HEADER ===================== -->
 <header class="app-header">
   <h1 class="app-title">Progress Hub</h1>
-  <button id="theme-toggle-btn" class="icon-button" type="button" title="Toggle light/dark theme">🌙</button>
+  <div class="header-actions">
+    <span id="sync-status" class="sync-status" hidden>
+      <span class="sync-status-dot"></span>
+      <span class="sync-status-label">Offline</span>
+    </span>
+    <span id="account-indicator" class="account-indicator" hidden>
+      <span id="account-email" class="account-email"></span>
+      <button id="sign-out-btn" class="button button-secondary button-small" type="button">Sign Out</button>
+    </span>
+    <button id="sign-in-btn" class="button button-secondary button-small" type="button">Sign In</button>
+    <button id="theme-toggle-btn" class="icon-button" type="button" title="Toggle light/dark theme">🌙</button>
+  </div>
 </header>
 
 <!-- ===================== TAB BAR ===================== -->
@@ -232,6 +243,8 @@ Buddy Guy | Damn Right, I've Got the Blues</pre>
   <option value="Maintenance"></option>
 </datalist>
 
+<!-- ===================== SUPABASE (CDN, no build step) ===================== -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="script.js"></script>
 </body>
 </html>

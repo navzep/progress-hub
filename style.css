@@ -63,6 +63,62 @@ body {
   font-weight: 700;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.sync-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.sync-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.sync-status-dot.sync-dot-ok { background: var(--success); }
+.sync-status-dot.sync-dot-syncing { background: var(--accent); animation: sync-pulse 1s ease-in-out infinite; }
+.sync-status-dot.sync-dot-offline { background: var(--text-muted); }
+.sync-status-dot.sync-dot-error { background: var(--danger); }
+
+@keyframes sync-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.account-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.account-email {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .account-email {
+    max-width: 70px;
+  }
+}
+
 .icon-button {
   background: none;
   border: 1px solid var(--border);

@@ -6,6 +6,27 @@
   var STORAGE_KEY = "progressHubData";
   var THEME_KEY = "progressHubTheme";
 
+  // ===================== SUPABASE CONFIG =====================
+  // Safe to embed: this is the publishable/anon key, not the secret key.
+  // Row Level Security on the "progress_data" table is what actually
+  // protects data — not secrecy of this key.
+  var SUPABASE_URL = "https://euzhnckmhfyndxefhqpe.supabase.co";
+  var SUPABASE_ANON_KEY = "sb_publishable_LH6uBnoGpZeRJACdJnc0Ow_ZUxO2iqA";
+  var CLOUD_SYNC_DEBOUNCE_MS = 600;
+
+  var supabaseClient = null;
+  if (typeof window !== "undefined" && window.supabase && typeof window.supabase.createClient === "function") {
+    try {
+      supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    } catch (e) {
+      supabaseClient = null;
+    }
+  }
+
+  var currentUser = null; // { id, email } while signed in, else null
+  var cloudSyncDebounceTimer = null;
+  var realtimeChannel = null;
+
   var RACE_STATUSES = ["Confirmed", "Tentative", "Bucket List", "Completed"];
   var STUDY_STATUSES = ["Not Started", "In Progress", "Reviewing", "Mastered"];
   var GUITAR_STATUSES = ["Learning", "In Progress", "Rhythm solid", "Nearly There", "Maintenance"];
@@ -237,6 +258,7 @@
 
   function saveState() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    scheduleCloudPush();
   }
 
   function generateId() {
@@ -458,13 +480,15 @@
 
   var modalState = { onSubmit: null };
 
-  function openModal(title, fieldsHtml, onSubmit, afterMount) {
+  function openModal(title, fieldsHtml, onSubmit, afterMount, opts) {
     var overlay = document.getElementById("modal-overlay");
     var titleEl = document.getElementById("modal-title");
     var form = document.getElementById("modal-form");
     titleEl.textContent = title;
-    form.innerHTML = fieldsHtml + '<button type="submit" class="button button-primary">Save</button>';
-    modalState.onSubmit = onSubmit;
+    var showSaveButton = !(opts && opts.noSaveButton);
+    var saveLabel = (opts && opts.saveLabel) || "Save";
+    form.innerHTML = fieldsHtml + (showSaveButton ? '<button type="submit" class="button button-primary">' + saveLabel + "</button>" : "");
+    modalState.onSubmit = onSubmit || null;
     overlay.hidden = false;
     if (afterMount) afterMount(form);
   }
@@ -1813,6 +1837,382 @@
     });
   }
 
+  // ===================== AUTH / CLOUD SYNC =====================
+
+  function stateHasAnyData(s) {
+    if (!s) return false;
+    return !!(
+      (s.guitarItems && s.guitarItems.length) ||
+      (s.trainingSessions && s.trainingSessions.length) ||
+      (s.races && s.races.length) ||
+      (s.studyTopics && s.studyTopics.length) ||
+      (s.listening && s.listening.length)
+    );
+  }
+
+  function setSyncStatus(status) {
+    var el = document.getElementById("sync-status");
+    if (!el) return;
+    if (!currentUser) {
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
+    var dot = el.querySelector(".sync-status-dot");
+    var label = el.querySelector(".sync-status-label");
+    var map = {
+      synced: { text: "Synced", cls: "sync-dot-ok" },
+      syncing: { text: "Syncing…", cls: "sync-dot-syncing" },
+      offline: { text: "Offline", cls: "sync-dot-offline" },
+      error: { text: "Sync error", cls: "sync-dot-error" },
+    };
+    var info = map[status] || map.offline;
+    if (label) label.textContent = info.text;
+    if (dot) dot.className = "sync-status-dot " + info.cls;
+  }
+
+  function updateAccountUI() {
+    var signInBtn = document.getElementById("sign-in-btn");
+    var accountIndicator = document.getElementById("account-indicator");
+    var accountEmail = document.getElementById("account-email");
+    if (!signInBtn || !accountIndicator || !accountEmail) return;
+    if (currentUser) {
+      signInBtn.hidden = true;
+      accountIndicator.hidden = false;
+      accountEmail.textContent = currentUser.email;
+    } else {
+      signInBtn.hidden = false;
+      accountIndicator.hidden = true;
+      setSyncStatus("offline");
+    }
+  }
+
+  async function fetchCloudRow(userId) {
+    var result = await supabaseClient
+      .from("progress_data")
+      .select("data, updated_at")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (result.error) throw result.error;
+    return result.data;
+  }
+
+  async function upsertCloudRow(userId, stateObj) {
+    var result = await supabaseClient
+      .from("progress_data")
+      .upsert({ user_id: userId, data: stateObj, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+    if (result.error) throw result.error;
+  }
+
+  function scheduleCloudPush() {
+    if (!currentUser || !supabaseClient) return;
+    clearTimeout(cloudSyncDebounceTimer);
+    cloudSyncDebounceTimer = setTimeout(function () {
+      pushStateToCloud();
+    }, CLOUD_SYNC_DEBOUNCE_MS);
+  }
+
+  async function pushStateToCloud() {
+    if (!currentUser || !supabaseClient) return;
+    setSyncStatus("syncing");
+    try {
+      await upsertCloudRow(currentUser.id, state);
+      setSyncStatus("synced");
+    } catch (e) {
+      setSyncStatus(navigator.onLine ? "error" : "offline");
+    }
+  }
+
+  function subscribeRealtime(userId) {
+    if (!supabaseClient) return;
+    unsubscribeRealtime();
+    realtimeChannel = supabaseClient
+      .channel("progress_data_changes_" + userId)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "progress_data", filter: "user_id=eq." + userId },
+        function (payload) {
+          if (payload && payload.new && payload.new.data) {
+            state = normalizeState(payload.new.data);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+            renderAll();
+            setSyncStatus("synced");
+          }
+        }
+      )
+      .subscribe();
+  }
+
+  function unsubscribeRealtime() {
+    if (realtimeChannel && supabaseClient) {
+      supabaseClient.removeChannel(realtimeChannel);
+    }
+    realtimeChannel = null;
+  }
+
+  function stopCloudSync() {
+    unsubscribeRealtime();
+    clearTimeout(cloudSyncDebounceTimer);
+  }
+
+  function openMigrationModal(opts) {
+    var bodyHtml;
+    if (opts.mode === "local-only") {
+      bodyHtml =
+        '<p class="card-subtext">We found data on this device but your account is empty.</p>' +
+        '<div class="button-row">' +
+        '<button id="migrate-yes-btn" class="button button-primary" type="button">Migrate to my account</button>' +
+        '<button id="migrate-skip-btn" class="button button-secondary" type="button">Skip</button>' +
+        "</div>";
+    } else {
+      bodyHtml =
+        '<p class="card-subtext">Both this device and your account already have data. Choose carefully — this can’t be undone automatically.</p>' +
+        '<div class="button-row">' +
+        '<button id="use-cloud-btn" class="button button-primary" type="button">Use cloud data</button>' +
+        '<button id="replace-cloud-btn" class="button button-danger" type="button">Replace cloud with this device’s data</button>' +
+        "</div>" +
+        '<p class="hint-text">Tip: use Export Data first if you want a backup of what’s on this device.</p>' +
+        '<div class="button-row">' +
+        '<button id="cancel-migration-btn" class="button button-secondary" type="button">Decide later</button>' +
+        "</div>";
+    }
+
+    openModal(
+      opts.mode === "local-only" ? "Migrate Local Data?" : "Local & Cloud Data Both Exist",
+      bodyHtml,
+      null,
+      function (form) {
+        if (opts.mode === "local-only") {
+          form.querySelector("#migrate-yes-btn").addEventListener("click", function () {
+            closeModal();
+            opts.onMigrate();
+          });
+          form.querySelector("#migrate-skip-btn").addEventListener("click", function () {
+            closeModal();
+            opts.onSkip();
+          });
+        } else {
+          form.querySelector("#use-cloud-btn").addEventListener("click", function () {
+            closeModal();
+            opts.onUseCloud();
+          });
+          form.querySelector("#replace-cloud-btn").addEventListener("click", function () {
+            if (!confirm("This will overwrite your cloud data with what's on this device. Continue?")) return;
+            closeModal();
+            opts.onReplaceCloud();
+          });
+          form.querySelector("#cancel-migration-btn").addEventListener("click", function () {
+            closeModal();
+            opts.onCancel();
+          });
+        }
+      },
+      { noSaveButton: true }
+    );
+  }
+
+  async function startCloudSync(user) {
+    setSyncStatus("syncing");
+    var migrationKey = "progressHubMigrated:" + user.id;
+    var alreadyMigrated = localStorage.getItem(migrationKey) === "true";
+
+    try {
+      var cloudRow = await fetchCloudRow(user.id);
+      var localHasData = stateHasAnyData(state);
+      var cloudHasData = cloudRow && stateHasAnyData(cloudRow.data);
+
+      if (!cloudHasData && localHasData && !alreadyMigrated) {
+        setSyncStatus("synced");
+        openMigrationModal({
+          mode: "local-only",
+          onMigrate: async function () {
+            try {
+              await upsertCloudRow(user.id, state);
+              localStorage.setItem(migrationKey, "true");
+              setSyncStatus("synced");
+              showToast("Local data migrated to your account");
+            } catch (e) {
+              setSyncStatus(navigator.onLine ? "error" : "offline");
+              showToast("Migration failed — your local data is unchanged");
+            }
+          },
+          onSkip: function () {
+            localStorage.setItem(migrationKey, "true");
+            showToast("Skipped migration — this device stays local-only for now");
+          },
+        });
+      } else if (cloudHasData && localHasData && !alreadyMigrated) {
+        setSyncStatus("synced");
+        openMigrationModal({
+          mode: "both",
+          onUseCloud: function () {
+            state = normalizeState(cloudRow.data);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+            localStorage.setItem(migrationKey, "true");
+            renderAll();
+            showToast("Loaded your account's cloud data");
+          },
+          onReplaceCloud: async function () {
+            try {
+              await upsertCloudRow(user.id, state);
+              localStorage.setItem(migrationKey, "true");
+              showToast("Cloud data replaced with this device's data");
+            } catch (e) {
+              setSyncStatus(navigator.onLine ? "error" : "offline");
+              showToast("Replace failed — nothing was changed");
+            }
+          },
+          onCancel: function () {
+            showToast("No changes made — you'll be asked again next sign-in");
+          },
+        });
+      } else if (cloudHasData) {
+        state = normalizeState(cloudRow.data);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        renderAll();
+        setSyncStatus("synced");
+      } else {
+        await upsertCloudRow(user.id, state);
+        localStorage.setItem(migrationKey, "true");
+        setSyncStatus("synced");
+      }
+
+      subscribeRealtime(user.id);
+    } catch (e) {
+      setSyncStatus(navigator.onLine ? "error" : "offline");
+    }
+  }
+
+  async function sendMagicLink(email) {
+    if (!supabaseClient) {
+      return { ok: false, error: "Cloud sync isn't available right now (couldn't load Supabase)." };
+    }
+    try {
+      var result = await supabaseClient.auth.signInWithOtp({
+        email: email,
+        options: { emailRedirectTo: window.location.href },
+      });
+      if (result.error) return { ok: false, error: result.error.message };
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: "Network error — check your connection and try again." };
+    }
+  }
+
+  function openSignInModal() {
+    var fieldsHtml =
+      '<div class="form-group">' +
+      '<label for="auth-email">Email</label>' +
+      '<input id="auth-email" name="email" type="email" placeholder="you@example.com" required>' +
+      "</div>" +
+      '<p class="hint-text">We’ll email you a magic link — no password needed.</p>' +
+      '<p id="auth-status-msg" class="hint-text"></p>' +
+      '<p class="hint-text">Don’t want an account? Just close this — Progress Hub keeps working on this device only, and your data won’t sync anywhere.</p>';
+
+    // Uses the standard form-submit pattern (like every other modal in the
+    // app) rather than a bare button click handler, so pressing Enter in the
+    // email field submits it naturally instead of silently doing nothing.
+    openModal(
+      "Sign In",
+      fieldsHtml,
+      async function (formData, formEl) {
+        var email = formData.get("email").trim();
+        var statusMsg = formEl.querySelector("#auth-status-msg");
+        if (!email) {
+          if (statusMsg) statusMsg.textContent = "Enter your email first.";
+          return;
+        }
+        var submitBtn = formEl.querySelector('button[type="submit"]');
+        if (submitBtn) {
+          submitBtn.disabled = true;
+          submitBtn.textContent = "Sending…";
+        }
+        var result = await sendMagicLink(email);
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Send Magic Link";
+        }
+        if (statusMsg) {
+          statusMsg.textContent = result.ok ? "Check your email for the sign-in link!" : "Error: " + result.error;
+        }
+      },
+      null,
+      { saveLabel: "Send Magic Link" }
+    );
+  }
+
+  function handleAuthChange(session) {
+    var user = session && session.user ? { id: session.user.id, email: session.user.email } : null;
+
+    // Re-entrant guard: if this is the same user we already have loaded
+    // (e.g. a duplicate INITIAL_SESSION firing, or any other spurious
+    // re-notification), just refresh the email and stop — don't re-run the
+    // migration flow, don't yank an open modal out from under the user, and
+    // don't overwrite in-memory edits with the last-synced cloud copy.
+    if (user && currentUser && user.id === currentUser.id) {
+      currentUser = user;
+      updateAccountUI();
+      return;
+    }
+
+    currentUser = user;
+    updateAccountUI();
+    if (user) {
+      var overlay = document.getElementById("modal-overlay");
+      if (overlay && !overlay.hidden) closeModal();
+      startCloudSync(user);
+    } else {
+      stopCloudSync();
+    }
+  }
+
+  function initAuth() {
+    var signInBtn = document.getElementById("sign-in-btn");
+    var signOutBtn = document.getElementById("sign-out-btn");
+    if (signInBtn) signInBtn.addEventListener("click", openSignInModal);
+
+    if (!supabaseClient) {
+      updateAccountUI();
+      return;
+    }
+
+    if (signOutBtn) {
+      signOutBtn.addEventListener("click", function () {
+        supabaseClient.auth.signOut();
+      });
+    }
+
+    // Supabase v2 fires INITIAL_SESSION through onAuthStateChange on setup,
+    // so that (plus SIGNED_IN/SIGNED_OUT) is the single source of truth here.
+    // We deliberately do NOT also call getSession().then(...) — doing both
+    // caused handleAuthChange to run twice for the same session on load.
+    // Events like TOKEN_REFRESHED are intentionally ignored: they fire
+    // periodically for the same signed-in user and must not re-trigger the
+    // migration flow or overwrite in-progress local edits.
+    supabaseClient.auth.onAuthStateChange(function (event, session) {
+      if (event === "SIGNED_IN" || event === "INITIAL_SESSION") {
+        handleAuthChange(session);
+      } else if (event === "SIGNED_OUT") {
+        handleAuthChange(null);
+      }
+    });
+
+    window.addEventListener("online", function () {
+      if (currentUser) pushStateToCloud();
+    });
+    window.addEventListener("offline", function () {
+      if (currentUser) setSyncStatus("offline");
+    });
+    window.addEventListener("pagehide", function () {
+      // Best-effort flush: don't leave an edit sitting in the debounce
+      // window if the tab is closing right after a save.
+      if (currentUser && cloudSyncDebounceTimer) {
+        clearTimeout(cloudSyncDebounceTimer);
+        pushStateToCloud();
+      }
+    });
+  }
+
   // ===================== IMPORT / EXPORT =====================
 
   function initDataButtons() {
@@ -1911,6 +2311,7 @@
     initListeningPasteImporter();
     initDataButtons();
     initGlobalTimerControls();
+    initAuth();
     renderAll();
   });
 })();
