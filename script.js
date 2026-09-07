@@ -2272,8 +2272,13 @@
     }
 
     if (signOutBtn) {
-      signOutBtn.addEventListener("click", function () {
-        supabaseClient.auth.signOut();
+      signOutBtn.addEventListener("click", async function () {
+        // Don't rely solely on onAuthStateChange's SIGNED_OUT event to
+        // update the UI — force it the moment signOut() resolves, so the
+        // header reflects the change immediately rather than only after
+        // a later reload.
+        await supabaseClient.auth.signOut();
+        handleAuthChange(null);
       });
     }
 
