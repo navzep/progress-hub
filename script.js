@@ -297,10 +297,30 @@
 
   // ===================== WEB AUDIO CHIME =====================
 
-  function playChime() {
+  // iOS Safari only allows an AudioContext to start/resume when created (or
+  // resumed) synchronously inside a user-gesture handler. The chime actually
+  // fires later from a setInterval callback (when the countdown hits zero),
+  // which is not a gesture — so we lazily create one shared context and
+  // unlock/resume it at Start-click time (a real gesture), then reuse that
+  // same context for the chime whenever the timer completes.
+  var sharedAudioCtx = null;
+
+  function unlockAudioContext() {
     try {
       var Ctx = window.AudioContext || window.webkitAudioContext;
-      var ctx = new Ctx();
+      if (!Ctx) return;
+      if (!sharedAudioCtx) sharedAudioCtx = new Ctx();
+      if (sharedAudioCtx.state === "suspended") sharedAudioCtx.resume();
+    } catch (e) {
+      /* Web Audio unavailable — fail silently */
+    }
+  }
+
+  function playChime() {
+    try {
+      var ctx = sharedAudioCtx;
+      if (!ctx) return;
+      if (ctx.state === "suspended") ctx.resume();
       var now = ctx.currentTime;
       var notes = [523.25, 659.25, 783.99]; // C5, E5, G5
       notes.forEach(function (freq, i) {
@@ -317,9 +337,6 @@
         osc.start(start);
         osc.stop(start + 0.55);
       });
-      setTimeout(function () {
-        ctx.close();
-      }, 900);
     } catch (e) {
       /* Web Audio unavailable — fail silently */
     }
@@ -851,6 +868,10 @@
   function startTimer(itemId) {
     var item = findGuitarItem(itemId);
     if (!item) return;
+
+    // Runs inside a real click handler, so this is a valid place to
+    // create/resume the shared AudioContext for iOS Safari's autoplay policy.
+    unlockAudioContext();
 
     // Always clear any existing interval first — prevents duplicate intervals
     // if the user clicks quickly or resumes the same item repeatedly.

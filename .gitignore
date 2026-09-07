@@ -1,0 +1,15 @@
+# Exported app data (JSON exports from the Data card)
+progress-hub-export-*.json
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+
+# Local temp/log files
+*.log
