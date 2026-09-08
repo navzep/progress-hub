@@ -766,6 +766,23 @@ textarea {
   opacity: 0.6;
 }
 
+/* Today's Training preview rows on the Dashboard render as real <button>
+   elements (for native keyboard access) rather than the plain <div> the
+   Training tab's own list uses, since those rows also contain a checkbox. */
+button.session-row {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+button.session-row:hover,
+button.session-row:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
 .session-sport-icon {
   flex: 0 0 auto;
   font-size: 1.1rem;

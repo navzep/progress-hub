@@ -740,15 +740,27 @@
         todaySessions
           .map(function (s) {
             var meta = getSportMeta(s.sport);
+            // A real <button> (not a plain div) so each session is a
+            // native, keyboard-accessible tap target — matching the
+            // "Items Needing Attention" entries. Its own id attribute is
+            // deliberately NOT data-training-id: that attribute already
+            // uniquely identifies the session's row in the Training tab
+            // itself, and this dashboard preview stays in the DOM (just
+            // hidden) after switching tabs, so reusing the same attribute
+            // here would make navigateToItem's querySelector ambiguous —
+            // it could highlight this hidden preview instead of the real
+            // row. data-today-training-id is only ever used to look up
+            // which session was clicked before handing off to the shared
+            // navigateToItem() drill-down.
             return (
-              '<div class="session-row' + (s.completed ? " completed" : "") + '" style="border-left: 4px solid ' + meta.color + '">' +
+              '<button type="button" class="session-row' + (s.completed ? " completed" : "") + '" data-today-training-id="' + s.id + '" style="border-left: 4px solid ' + meta.color + '" aria-label="Open ' + escapeHtml(s.title) + ' in Training">' +
               '<span class="session-sport-icon" title="' + escapeHtml(s.sport) + '">' + meta.icon + "</span>" +
               '<div class="session-row-main">' +
               '<div class="session-row-title">' + escapeHtml(s.title) + "</div>" +
               '<div class="session-row-meta">' + escapeHtml(s.sport) + (s.duration ? " · " + escapeHtml(s.duration) : "") + "</div>" +
               "</div>" +
               '<span class="badge ' + (s.completed ? "badge-completed" : "") + '">' + (s.completed ? "Completed" : "Pending") + "</span>" +
-              "</div>"
+              "</button>"
             );
           })
           .join("") +
@@ -756,6 +768,12 @@
     }
 
     card.innerHTML = '<h3 class="card-title">Today’s Training</h3>' + bodyHtml;
+
+    card.querySelectorAll("[data-today-training-id]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        navigateToItem({ module: "training", itemId: btn.getAttribute("data-today-training-id") });
+      });
+    });
   }
 
   function renderAttentionCard() {
