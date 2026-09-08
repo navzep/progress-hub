@@ -28,7 +28,8 @@
   var realtimeChannel = null;
 
   var RACE_STATUSES = ["Confirmed", "Tentative", "Bucket List", "Completed"];
-  var STUDY_STATUSES = ["Not Started", "In Progress", "Reviewing", "Mastered"];
+  var TASK_STATUSES = ["Not Started", "In Progress", "Completed"];
+  var TASK_PRIORITIES = ["Low", "Medium", "High"];
   var GUITAR_STATUSES = ["Learning", "In Progress", "Rhythm solid", "Nearly There", "Maintenance"];
   var DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
   var SPORT_NAMES = ["Swim", "Bike", "Run", "Strength", "Mobility", "Recovery"];
@@ -202,18 +203,82 @@
       races: [],
       studyTopics: [],
       listening: [],
+      studySubjects: [],
+      studyTasks: [],
     };
+  }
+
+  // One-time migration: the Study tab used to be a flat list of "topics"
+  // (state.studyTopics) with a confidence percentage. It's now a
+  // Subject -> Tasks hierarchy (state.studySubjects / state.studyTasks).
+  // Detects the old shape (no studySubjects/studyTasks arrays present at
+  // all) and folds every existing topic into one "General Study" subject,
+  // so nothing a user already tracked is lost. Runs at most once per state
+  // object: once studySubjects/studyTasks exist (even empty), this is a
+  // no-op regardless of what's left in studyTopics.
+  function migrateStudyShape(parsed, normalized) {
+    var hasNewShape = parsed && (Array.isArray(parsed.studySubjects) || Array.isArray(parsed.studyTasks));
+    if (hasNewShape) {
+      normalized.studySubjects = Array.isArray(parsed.studySubjects) ? parsed.studySubjects : [];
+      normalized.studyTasks = Array.isArray(parsed.studyTasks) ? parsed.studyTasks : [];
+      return false;
+    }
+
+    normalized.studySubjects = [];
+    normalized.studyTasks = [];
+    if (!normalized.studyTopics.length) return false;
+
+    var now = new Date().toISOString();
+    var subject = { id: generateId(), name: "General Study", createdAt: now, updatedAt: now };
+    normalized.studySubjects.push(subject);
+
+    // Old topic "status" was a mastery scale; new task "status" is a
+    // lifecycle stage. Reviewing (still working it) folds into In Progress;
+    // Mastered (done) folds into Completed.
+    var statusMap = {
+      "Not Started": "Not Started",
+      "In Progress": "In Progress",
+      "Reviewing": "In Progress",
+      "Mastered": "Completed",
+    };
+
+    normalized.studyTasks = normalized.studyTopics.map(function (t) {
+      var noteParts = [];
+      if (t.goal) noteParts.push("Goal: " + t.goal);
+      if (t.notes) noteParts.push(t.notes);
+      return {
+        id: generateId(),
+        subjectId: subject.id,
+        type: "Other",
+        title: t.title || "",
+        status: statusMap[t.status] || "Not Started",
+        priority: "Medium",
+        dueDate: "",
+        completion: Number(t.confidence) || 0,
+        notes: noteParts.join("\n\n"),
+        lastWorkedOn: t.lastStudied || null,
+        createdAt: t.createdAt || t.updatedAt || now,
+        updatedAt: t.updatedAt || now,
+      };
+    });
+
+    // The data now lives in studyTasks — clear studyTopics so it can't be
+    // re-migrated (duplicated) on a future load.
+    normalized.studyTopics = [];
+    return true;
   }
 
   function normalizeState(parsed) {
     parsed = parsed || {};
-    return {
+    var normalized = {
       guitarItems: Array.isArray(parsed.guitarItems) ? parsed.guitarItems : [],
       trainingSessions: Array.isArray(parsed.trainingSessions) ? parsed.trainingSessions : [],
       races: Array.isArray(parsed.races) ? parsed.races : [],
       studyTopics: Array.isArray(parsed.studyTopics) ? parsed.studyTopics : [],
       listening: Array.isArray(parsed.listening) ? parsed.listening : [],
     };
+    migrateStudyShape(parsed, normalized);
+    return normalized;
   }
 
   function isValidStateShape(parsed) {
@@ -222,10 +287,14 @@
       return Array.isArray(parsed[key]);
     });
     if (!coreOk) return false;
-    // "listening" is optional for backward compatibility with exports made
-    // before this module existed — but if present, it must be an array.
-    if (Object.prototype.hasOwnProperty.call(parsed, "listening") && !Array.isArray(parsed.listening)) {
-      return false;
+    // These are optional for backward compatibility with exports made
+    // before each module existed — but if present, must be arrays.
+    var optionalArrayKeys = ["listening", "studySubjects", "studyTasks"];
+    for (var i = 0; i < optionalArrayKeys.length; i++) {
+      var key = optionalArrayKeys[i];
+      if (Object.prototype.hasOwnProperty.call(parsed, key) && !Array.isArray(parsed[key])) {
+        return false;
+      }
     }
     return true;
   }
@@ -243,11 +312,16 @@
     try {
       var parsed = JSON.parse(raw);
       var hadListening = parsed && Array.isArray(parsed.listening);
+      var hadStudyGrouping = parsed && (Array.isArray(parsed.studySubjects) || Array.isArray(parsed.studyTasks));
       var normalized = normalizeState(parsed);
-      if (!hadListening) {
-        // Migration: an existing saved user predating the Listening module.
-        // Add the starter library without touching anything else they saved.
-        normalized.listening = seedListening();
+      if (!hadListening || !hadStudyGrouping) {
+        // One-time migrations: an existing saved user predating the
+        // Listening module (add the starter library), and/or predating the
+        // Study Subjects/Tasks grouping (already folded into `normalized`
+        // by normalizeState). Persist immediately so the result — not a
+        // freshly re-migrated copy with new random ids — is what's read
+        // back next time.
+        if (!hadListening) normalized.listening = seedListening();
         localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
       }
       return normalized;
@@ -379,11 +453,12 @@
     return "level-high";
   }
 
-  function confidenceBarHtml(value) {
+  function confidenceBarHtml(value, label) {
     value = Number(value) || 0;
+    label = label || "Confidence";
     return (
       '<div class="confidence-bar-wrap">' +
-      '<div class="confidence-bar-label"><span>Confidence</span><span>' + value + '%</span></div>' +
+      '<div class="confidence-bar-label"><span>' + label + '</span><span>' + value + '%</span></div>' +
       '<div class="confidence-bar-track"><div class="confidence-bar-fill ' + confidenceLevelClass(value) + '" style="width:' + value + '%"></div></div>' +
       "</div>"
     );
@@ -535,13 +610,16 @@
       }
     });
 
-    state.studyTopics.forEach(function (t) {
-      if (!t.lastStudied) {
-        items.push("📚 " + t.title + " — never studied");
+    state.studyTasks.forEach(function (t) {
+      if (t.status === "Completed") return;
+      var subjectName = studySubjectName(t.subjectId);
+      var label = "📚 " + (subjectName ? subjectName + ": " : "") + t.title;
+      if (!t.lastWorkedOn) {
+        items.push(label + " — never worked on");
       } else {
-        var days = daysBetween(t.lastStudied, today);
+        var days = daysBetween(t.lastWorkedOn, today);
         if (days >= ATTENTION_DAYS_THRESHOLD) {
-          items.push("📚 " + t.title + " — last studied " + days + " days ago");
+          items.push(label + " — last worked on " + days + " days ago");
         }
       }
     });
@@ -655,10 +733,11 @@
     }).length;
     var weekPct = weekSessions.length ? Math.round((weekCompleted / weekSessions.length) * 100) : 0;
 
-    var avgConfidence = function (list) {
+    var avgConfidence = function (list, field) {
+      field = field || "confidence";
       if (!list.length) return "—";
       var sum = list.reduce(function (acc, i) {
-        return acc + (Number(i.confidence) || 0);
+        return acc + (Number(i[field]) || 0);
       }, 0);
       return Math.round(sum / list.length) + "%";
     };
@@ -732,9 +811,11 @@
       {
         tab: "study",
         color: "study",
-        label: "Study Topics",
-        value: String(state.studyTopics.length),
-        sub: "Avg confidence " + avgConfidence(state.studyTopics),
+        label: "Study Tasks",
+        value: String(state.studyTasks.length),
+        sub:
+          "Avg completion " + avgConfidence(state.studyTasks, "completion") +
+          " · " + state.studySubjects.length + " subject" + (state.studySubjects.length === 1 ? "" : "s"),
       },
       {
         tab: "listening",
@@ -1458,131 +1539,321 @@
 
   // ===================== STUDY =====================
 
+  function studySubjectName(subjectId) {
+    var subject = state.studySubjects.find(function (s) {
+      return s.id === subjectId;
+    });
+    return subject ? subject.name : "";
+  }
+
+  function studySubjectSortedTasks(subjectId) {
+    return state.studyTasks
+      .filter(function (t) {
+        return t.subjectId === subjectId;
+      })
+      .slice()
+      .sort(function (a, b) {
+        var ad = a.dueDate || "9999-99-99";
+        var bd = b.dueDate || "9999-99-99";
+        if (ad !== bd) return ad < bd ? -1 : 1;
+        return (a.title || "").localeCompare(b.title || "");
+      });
+  }
+
+  function taskStatusBadgeClass(status) {
+    return "badge-" + String(status).toLowerCase().replace(/\s+/g, "-");
+  }
+
+  function taskPriorityBadgeClass(priority) {
+    return "badge-priority-" + String(priority).toLowerCase();
+  }
+
   function renderStudy() {
-    var el = document.getElementById("study-topics-list");
-    if (!state.studyTopics.length) {
-      el.innerHTML = '<div class="empty-state">No study topics yet. Add one to start tracking.</div>';
+    var el = document.getElementById("study-subjects-list");
+    if (!state.studySubjects.length) {
+      el.innerHTML = '<div class="empty-state">No study subjects yet. Add one, or paste tasks above to create subjects automatically.</div>';
       return;
     }
 
-    var sorted = state.studyTopics.slice().sort(function (a, b) {
-      return (b.updatedAt || "").localeCompare(a.updatedAt || "");
+    var today = todayISO();
+    var sortedSubjects = state.studySubjects.slice().sort(function (a, b) {
+      return (a.name || "").localeCompare(b.name || "");
     });
 
-    el.innerHTML = sorted
-      .map(function (t) {
+    el.innerHTML = sortedSubjects
+      .map(function (subj) {
+        var tasks = studySubjectSortedTasks(subj.id);
+        var completedCount = tasks.filter(function (t) {
+          return t.status === "Completed";
+        }).length;
+
+        var tasksHtml = tasks.length
+          ? '<div class="study-tasks-list">' +
+            tasks
+              .map(function (t) {
+                var overdue = !!(t.dueDate && t.dueDate < today && t.status !== "Completed");
+                return (
+                  '<div class="study-task-row' + (t.status === "Completed" ? " completed" : "") + '" data-id="' + t.id + '">' +
+                  '<input type="checkbox" data-toggle-task="' + t.id + '" ' + (t.status === "Completed" ? "checked" : "") + ">" +
+                  '<div class="study-task-main">' +
+                  '<div class="study-task-title">' + escapeHtml(t.title) + "</div>" +
+                  '<div class="study-task-meta' + (overdue ? " overdue" : "") + '">' +
+                  escapeHtml(t.type || "Other") +
+                  (t.dueDate ? " · Due " + formatDateNice(t.dueDate) : "") +
+                  " · " + (Number(t.completion) || 0) + "% complete" +
+                  "</div>" +
+                  (t.notes ? '<div class="item-card-notes">' + escapeHtml(t.notes) + "</div>" : "") +
+                  "</div>" +
+                  '<span class="badge ' + taskStatusBadgeClass(t.status) + '">' + escapeHtml(t.status) + "</span>" +
+                  '<span class="badge ' + taskPriorityBadgeClass(t.priority) + '">' + escapeHtml(t.priority) + "</span>" +
+                  '<div class="study-task-actions">' +
+                  '<button class="button button-secondary button-small" data-edit-task="' + t.id + '" type="button">Edit</button>' +
+                  '<button class="button button-danger button-small" data-delete-task="' + t.id + '" type="button">Delete</button>' +
+                  "</div>" +
+                  "</div>"
+                );
+              })
+              .join("") +
+            "</div>"
+          : '<div class="empty-state">No tasks yet.</div>';
+
         return (
-          '<div class="item-card" data-id="' + t.id + '">' +
-          '<div class="item-card-header">' +
-          '<div>' +
-          '<div class="item-card-title">' + escapeHtml(t.title) + "</div>" +
-          '<div class="item-card-meta">' + escapeHtml(t.status) + "</div>" +
+          '<div class="card study-subject-card" data-subject-id="' + subj.id + '">' +
+          '<div class="study-subject-header">' +
+          "<div>" +
+          '<h3 class="card-title">' + escapeHtml(subj.name) + "</h3>" +
+          '<div class="item-card-meta">' + completedCount + " / " + tasks.length + " tasks complete</div>" +
           "</div>" +
-          "</div>" +
-          (t.goal ? '<div class="item-card-meta">🎯 ' + escapeHtml(t.goal) + "</div>" : "") +
-          '<div class="item-card-meta">Last studied: ' + (t.lastStudied ? formatDateNice(t.lastStudied) : "Never") + "</div>" +
-          confidenceBarHtml(t.confidence) +
-          (t.notes ? '<div class="item-card-notes">' + escapeHtml(t.notes) + "</div>" : "") +
           '<div class="item-card-actions">' +
-          '<button class="button button-primary button-small" data-studied-today="' + t.id + '" type="button">Studied Today</button>' +
-          '<button class="button button-secondary button-small" data-edit-study="' + t.id + '" type="button">Edit</button>' +
-          '<button class="button button-danger button-small" data-delete-study="' + t.id + '" type="button">Delete</button>' +
+          '<button class="button button-secondary button-small" data-add-task-to="' + subj.id + '" type="button">+ Task</button>' +
+          '<button class="button button-secondary button-small" data-edit-subject="' + subj.id + '" type="button">Rename</button>' +
+          '<button class="button button-danger button-small" data-delete-subject="' + subj.id + '" type="button">Delete</button>' +
           "</div>" +
+          "</div>" +
+          tasksHtml +
           "</div>"
         );
       })
       .join("");
 
-    el.querySelectorAll("[data-studied-today]").forEach(function (btn) {
+    el.querySelectorAll("[data-add-task-to]").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        var id = btn.getAttribute("data-studied-today");
-        var topic = state.studyTopics.find(function (t) { return t.id === id; });
-        if (!topic) return;
-        topic.lastStudied = todayISO();
-        topic.updatedAt = new Date().toISOString();
-        saveState();
-        renderAll();
-        showToast(topic.title + " marked studied today");
+        openStudyTaskModal(null, btn.getAttribute("data-add-task-to"));
       });
     });
-    el.querySelectorAll("[data-edit-study]").forEach(function (btn) {
+    el.querySelectorAll("[data-edit-subject]").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        openStudyModal(btn.getAttribute("data-edit-study"));
+        openStudySubjectModal(btn.getAttribute("data-edit-subject"));
       });
     });
-    el.querySelectorAll("[data-delete-study]").forEach(function (btn) {
+    el.querySelectorAll("[data-delete-subject]").forEach(function (btn) {
       btn.addEventListener("click", function () {
-        var id = btn.getAttribute("data-delete-study");
-        if (!confirm("Delete this study topic?")) return;
-        state.studyTopics = state.studyTopics.filter(function (t) { return t.id !== id; });
+        var id = btn.getAttribute("data-delete-subject");
+        var subject = state.studySubjects.find(function (s) {
+          return s.id === id;
+        });
+        if (!subject) return;
+        var taskCount = state.studyTasks.filter(function (t) {
+          return t.subjectId === id;
+        }).length;
+        var msg = taskCount
+          ? 'Delete "' + subject.name + '" and its ' + taskCount + " task" + (taskCount === 1 ? "" : "s") + "?"
+          : 'Delete "' + subject.name + '"?';
+        if (!confirm(msg)) return;
+        state.studySubjects = state.studySubjects.filter(function (s) {
+          return s.id !== id;
+        });
+        state.studyTasks = state.studyTasks.filter(function (t) {
+          return t.subjectId !== id;
+        });
         saveState();
         renderAll();
-        showToast("Topic deleted");
+        showToast("Subject deleted");
+      });
+    });
+    el.querySelectorAll("[data-toggle-task]").forEach(function (cb) {
+      cb.addEventListener("change", function () {
+        var id = cb.getAttribute("data-toggle-task");
+        var task = state.studyTasks.find(function (t) {
+          return t.id === id;
+        });
+        if (!task) return;
+        task.status = cb.checked ? "Completed" : "In Progress";
+        task.completion = cb.checked ? 100 : task.completion;
+        task.lastWorkedOn = todayISO();
+        task.updatedAt = new Date().toISOString();
+        saveState();
+        renderAll();
+      });
+    });
+    el.querySelectorAll("[data-edit-task]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-edit-task");
+        var task = state.studyTasks.find(function (t) {
+          return t.id === id;
+        });
+        if (task) openStudyTaskModal(id, task.subjectId);
+      });
+    });
+    el.querySelectorAll("[data-delete-task]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-delete-task");
+        if (!confirm("Delete this task?")) return;
+        state.studyTasks = state.studyTasks.filter(function (t) {
+          return t.id !== id;
+        });
+        saveState();
+        renderAll();
+        showToast("Task deleted");
       });
     });
   }
 
-  function studyFieldsHtml(topic) {
-    topic = topic || { title: "", status: "Not Started", confidence: 50, goal: "", notes: "" };
+  function studySubjectFieldsHtml(subject) {
+    subject = subject || { name: "" };
     return (
       '<div class="form-group">' +
-      '<label for="sf-title">Topic</label>' +
-      '<input id="sf-title" name="title" type="text" required value="' + escapeHtml(topic.title) + '">' +
-      "</div>" +
-      '<div class="form-group">' +
-      '<label for="sf-status">Status</label>' +
-      '<select id="sf-status" name="status">' +
-      STUDY_STATUSES.map(function (s) {
-        return '<option value="' + s + '"' + (topic.status === s ? " selected" : "") + ">" + s + "</option>";
-      }).join("") +
-      "</select>" +
-      "</div>" +
-      '<div class="form-group">' +
-      '<label for="sf-goal">Goal</label>' +
-      '<input id="sf-goal" name="goal" type="text" placeholder="e.g. Pass the practice exam" value="' + escapeHtml(topic.goal) + '">' +
-      "</div>" +
-      '<div class="form-group">' +
-      '<label for="sf-confidence">Confidence <span class="range-value" id="sf-confidence-value">' + topic.confidence + '%</span></label>' +
-      '<input id="sf-confidence" name="confidence" type="range" min="0" max="100" step="5" value="' + topic.confidence + '">' +
-      "</div>" +
-      '<div class="form-group">' +
-      '<label for="sf-notes">Notes</label>' +
-      '<textarea id="sf-notes" name="notes" rows="3">' + escapeHtml(topic.notes) + "</textarea>" +
+      '<label for="ssf-name">Subject Name</label>' +
+      '<input id="ssf-name" name="name" type="text" required placeholder="e.g. Psychology" value="' + escapeHtml(subject.name) + '">' +
       "</div>"
     );
   }
 
-  function openStudyModal(id) {
-    var topic = id ? state.studyTopics.find(function (t) { return t.id === id; }) : null;
+  function openStudySubjectModal(id) {
+    var subject = id ? state.studySubjects.find(function (s) { return s.id === id; }) : null;
     openModal(
-      topic ? "Edit Study Topic" : "Add Study Topic",
-      studyFieldsHtml(topic),
+      subject ? "Rename Subject" : "Add Subject",
+      studySubjectFieldsHtml(subject),
       function (formData) {
-        var data = {
-          title: formData.get("title").trim(),
-          status: formData.get("status"),
-          goal: formData.get("goal").trim(),
-          confidence: Number(formData.get("confidence")),
-          notes: formData.get("notes").trim(),
-          updatedAt: new Date().toISOString(),
-        };
-        if (!data.title) return;
-        if (topic) {
-          data.lastStudied = topic.lastStudied || null;
-          Object.assign(topic, data);
+        var name = formData.get("name").trim();
+        if (!name) return;
+        var now = new Date().toISOString();
+        if (subject) {
+          subject.name = name;
+          subject.updatedAt = now;
         } else {
-          data.id = generateId();
-          data.lastStudied = null;
-          state.studyTopics.push(data);
+          state.studySubjects.push({ id: generateId(), name: name, createdAt: now, updatedAt: now });
         }
         saveState();
         renderAll();
         closeModal();
-        showToast(topic ? "Topic updated" : "Topic added");
+        showToast(subject ? "Subject renamed" : "Subject added");
+      }
+    );
+  }
+
+  function studySubjectOptionsHtml(selectedId) {
+    return state.studySubjects
+      .slice()
+      .sort(function (a, b) {
+        return (a.name || "").localeCompare(b.name || "");
+      })
+      .map(function (s) {
+        return '<option value="' + s.id + '"' + (s.id === selectedId ? " selected" : "") + ">" + escapeHtml(s.name) + "</option>";
+      })
+      .join("");
+  }
+
+  function studyTaskFieldsHtml(task, defaultSubjectId) {
+    task = task || {
+      subjectId: defaultSubjectId || (state.studySubjects[0] && state.studySubjects[0].id) || "",
+      type: "Other",
+      title: "",
+      status: "Not Started",
+      priority: "Medium",
+      dueDate: "",
+      completion: 0,
+      notes: "",
+    };
+    return (
+      '<div class="form-group">' +
+      '<label for="stf-subject">Subject</label>' +
+      '<select id="stf-subject" name="subjectId" required>' + studySubjectOptionsHtml(task.subjectId) + "</select>" +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="stf-title">Task Title</label>' +
+      '<input id="stf-title" name="title" type="text" required value="' + escapeHtml(task.title) + '">' +
+      "</div>" +
+      '<div class="form-row">' +
+      '<div class="form-group">' +
+      '<label for="stf-type">Type</label>' +
+      '<input id="stf-type" name="type" type="text" list="study-type-suggestions" value="' + escapeHtml(task.type) + '">' +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="stf-status">Status</label>' +
+      '<select id="stf-status" name="status">' +
+      TASK_STATUSES.map(function (s) {
+        return '<option value="' + s + '"' + (task.status === s ? " selected" : "") + ">" + s + "</option>";
+      }).join("") +
+      "</select>" +
+      "</div>" +
+      "</div>" +
+      '<div class="form-row">' +
+      '<div class="form-group">' +
+      '<label for="stf-priority">Priority</label>' +
+      '<select id="stf-priority" name="priority">' +
+      TASK_PRIORITIES.map(function (p) {
+        return '<option value="' + p + '"' + (task.priority === p ? " selected" : "") + ">" + p + "</option>";
+      }).join("") +
+      "</select>" +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="stf-due">Due Date</label>' +
+      '<input id="stf-due" name="dueDate" type="date" value="' + escapeHtml(task.dueDate) + '">' +
+      "</div>" +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="stf-completion">Completion <span class="range-value" id="stf-completion-value">' + (Number(task.completion) || 0) + '%</span></label>' +
+      '<input id="stf-completion" name="completion" type="range" min="0" max="100" step="5" value="' + (Number(task.completion) || 0) + '">' +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="stf-notes">Notes</label>' +
+      '<textarea id="stf-notes" name="notes" rows="3">' + escapeHtml(task.notes) + "</textarea>" +
+      "</div>"
+    );
+  }
+
+  function openStudyTaskModal(id, defaultSubjectId) {
+    if (!state.studySubjects.length) {
+      showToast("Add a subject first");
+      return;
+    }
+    var task = id ? state.studyTasks.find(function (t) { return t.id === id; }) : null;
+    openModal(
+      task ? "Edit Task" : "Add Task",
+      studyTaskFieldsHtml(task, defaultSubjectId),
+      function (formData) {
+        var data = {
+          subjectId: formData.get("subjectId"),
+          type: (formData.get("type") || "").trim() || "Other",
+          title: formData.get("title").trim(),
+          status: formData.get("status"),
+          priority: formData.get("priority"),
+          dueDate: formData.get("dueDate") || "",
+          completion: Number(formData.get("completion")) || 0,
+          notes: formData.get("notes").trim(),
+          updatedAt: new Date().toISOString(),
+        };
+        if (!data.title || !data.subjectId) return;
+        if (data.status === "Completed") data.completion = 100;
+        if (task) {
+          data.createdAt = task.createdAt || task.updatedAt || data.updatedAt;
+          data.lastWorkedOn = task.lastWorkedOn || null;
+          Object.assign(task, data);
+        } else {
+          data.id = generateId();
+          data.createdAt = data.updatedAt;
+          data.lastWorkedOn = null;
+          state.studyTasks.push(data);
+        }
+        saveState();
+        renderAll();
+        closeModal();
+        showToast(task ? "Task updated" : "Task added");
       },
       function (form) {
-        var range = form.querySelector("#sf-confidence");
-        var label = form.querySelector("#sf-confidence-value");
+        var range = form.querySelector("#stf-completion");
+        var label = form.querySelector("#stf-completion-value");
         if (range && label) {
           range.addEventListener("input", function () {
             label.textContent = range.value + "%";
@@ -1590,6 +1861,144 @@
         }
       }
     );
+  }
+
+  function studyTaskDupKey(subjectName, title) {
+    return (subjectName || "").trim().toLowerCase() + " :: " + (title || "").trim().toLowerCase();
+  }
+
+  function parseStudyPasteText(text) {
+    var lines = text
+      .split("\n")
+      .map(function (l) {
+        return l.trim();
+      })
+      .filter(Boolean);
+    var rows = [];
+    var invalidStatusCount = 0;
+    var invalidPriorityCount = 0;
+
+    lines.forEach(function (line) {
+      var parts = line.split("|").map(function (p) {
+        return p.trim();
+      });
+      if (parts.length < 2) return;
+
+      var subject = parts[0];
+      var type, title, statusRaw, priorityRaw, dueDateRaw;
+      if (parts.length === 2) {
+        // Simple format: Subject | Task Title
+        type = "Other";
+        title = parts[1];
+        statusRaw = "";
+        priorityRaw = "";
+        dueDateRaw = "";
+      } else {
+        // Full format: Subject | Type | Task Title | Status | Priority | Due Date
+        type = parts[1] || "Other";
+        title = parts[2] || "";
+        statusRaw = parts[3] || "";
+        priorityRaw = parts[4] || "";
+        dueDateRaw = parts[5] || "";
+      }
+      if (!subject || !title) return;
+
+      var status = "Not Started";
+      if (statusRaw) {
+        if (TASK_STATUSES.indexOf(statusRaw) !== -1) {
+          status = statusRaw;
+        } else {
+          invalidStatusCount++;
+        }
+      }
+
+      var priority = "Medium";
+      if (priorityRaw) {
+        if (TASK_PRIORITIES.indexOf(priorityRaw) !== -1) {
+          priority = priorityRaw;
+        } else {
+          invalidPriorityCount++;
+        }
+      }
+
+      var dueDate = /^\d{4}-\d{2}-\d{2}$/.test(dueDateRaw) ? dueDateRaw : "";
+
+      rows.push({ subject: subject, type: type, title: title, status: status, priority: priority, dueDate: dueDate });
+    });
+
+    return { rows: rows, invalidStatusCount: invalidStatusCount, invalidPriorityCount: invalidPriorityCount };
+  }
+
+  function initStudyPasteImporter() {
+    document.getElementById("parse-study-btn").addEventListener("click", function () {
+      var textarea = document.getElementById("study-paste-input");
+      var result = parseStudyPasteText(textarea.value);
+      if (!result.rows.length) {
+        showToast("No tasks found. Check the format.");
+        return;
+      }
+
+      var now = new Date().toISOString();
+
+      var subjectsByName = {};
+      state.studySubjects.forEach(function (s) {
+        subjectsByName[s.name.trim().toLowerCase()] = s;
+      });
+
+      var existingDupKeys = {};
+      state.studyTasks.forEach(function (t) {
+        existingDupKeys[studyTaskDupKey(studySubjectName(t.subjectId), t.title)] = true;
+      });
+
+      var added = 0;
+      var duplicates = 0;
+      var subjectsCreated = 0;
+
+      result.rows.forEach(function (row) {
+        var subjectKey = row.subject.trim().toLowerCase();
+        var subject = subjectsByName[subjectKey];
+        if (!subject) {
+          subject = { id: generateId(), name: row.subject, createdAt: now, updatedAt: now };
+          state.studySubjects.push(subject);
+          subjectsByName[subjectKey] = subject;
+          subjectsCreated++;
+        }
+
+        var dupKey = studyTaskDupKey(subject.name, row.title);
+        if (existingDupKeys[dupKey]) {
+          duplicates++;
+          return;
+        }
+        existingDupKeys[dupKey] = true;
+
+        state.studyTasks.push({
+          id: generateId(),
+          subjectId: subject.id,
+          type: row.type,
+          title: row.title,
+          status: row.status,
+          priority: row.priority,
+          dueDate: row.dueDate,
+          completion: row.status === "Completed" ? 100 : 0,
+          notes: "",
+          lastWorkedOn: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+        added++;
+      });
+
+      saveState();
+      textarea.value = "";
+      renderAll();
+
+      var msg = result.rows.length + " task(s) detected — " + added + " imported";
+      if (subjectsCreated > 0) msg += ", " + subjectsCreated + " new subject(s) created";
+      if (duplicates > 0) msg += ", " + duplicates + " duplicate(s) skipped";
+      if (result.invalidStatusCount > 0) msg += ", " + result.invalidStatusCount + " unrecognized status defaulted";
+      if (result.invalidPriorityCount > 0) msg += ", " + result.invalidPriorityCount + " unrecognized priority defaulted";
+      showToast(msg);
+    });
   }
 
   // ===================== LISTENING =====================
@@ -1846,6 +2255,7 @@
       (s.trainingSessions && s.trainingSessions.length) ||
       (s.races && s.races.length) ||
       (s.studyTopics && s.studyTopics.length) ||
+      (s.studyTasks && s.studyTasks.length) ||
       (s.listening && s.listening.length)
     );
   }
@@ -1935,6 +2345,10 @@
           if (payload && payload.new && payload.new.data) {
             state = normalizeState(payload.new.data);
             localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+            // If the incoming cloud row predated a local one-time migration
+            // (e.g. Study Subjects/Tasks), push the migrated shape back so
+            // the cloud copy doesn't stay stuck on the old shape.
+            scheduleCloudPush();
             renderAll();
             setSyncStatus("synced");
           }
@@ -2049,6 +2463,7 @@
             state = normalizeState(cloudRow.data);
             localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
             localStorage.setItem(migrationKey, "true");
+            scheduleCloudPush();
             renderAll();
             showToast("Loaded your account's cloud data");
           },
@@ -2069,6 +2484,7 @@
       } else if (cloudHasData) {
         state = normalizeState(cloudRow.data);
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        scheduleCloudPush();
         renderAll();
         setSyncStatus("synced");
       } else {
@@ -2380,8 +2796,11 @@
     document.getElementById("add-race-btn").addEventListener("click", function () {
       openRaceModal(null);
     });
-    document.getElementById("add-study-topic-btn").addEventListener("click", function () {
-      openStudyModal(null);
+    document.getElementById("add-study-subject-btn").addEventListener("click", function () {
+      openStudySubjectModal(null);
+    });
+    document.getElementById("add-study-task-btn").addEventListener("click", function () {
+      openStudyTaskModal(null, null);
     });
     document.getElementById("add-listening-album-btn").addEventListener("click", function () {
       openListeningModal(null);
@@ -2411,6 +2830,7 @@
     initRaceFilter();
     initListeningFilter();
     initListeningPasteImporter();
+    initStudyPasteImporter();
     initDataButtons();
     initGlobalTimerControls();
     initAuth();

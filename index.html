@@ -14,7 +14,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Progress Hub">
 
-<link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body data-theme="dark">
 
@@ -174,9 +174,24 @@ Wednesday: Bike 60 min intervals</pre>
   <section class="tab-section" data-section="study">
     <div class="section-header">
       <h2 class="section-title">Study</h2>
-      <button id="add-study-topic-btn" class="button button-primary" type="button">+ Add Topic</button>
+      <div class="button-row">
+        <button id="add-study-subject-btn" class="button button-secondary" type="button">+ Add Subject</button>
+        <button id="add-study-task-btn" class="button button-primary" type="button">+ Add Task</button>
+      </div>
     </div>
-    <div id="study-topics-list" class="card-grid"></div>
+
+    <div class="card">
+      <h3 class="card-title">Paste Study Tasks</h3>
+      <textarea id="study-paste-input" class="plan-paste-textarea" rows="4" placeholder="Paste your study tasks here..."></textarea>
+      <button id="parse-study-btn" class="button button-primary" type="button">Parse &amp; Import</button>
+      <p class="example-label">Expected format:</p>
+      <pre class="example-block">Psychology | Assignment | Task 3 ethics draft | In Progress | High | 2026-09-15
+Psychology | Reading | Review BPS ethics code | Not Started | Medium |
+Data Science with Python | Assignment | Candy Analysis | In Progress | High | 2026-09-20</pre>
+      <p class="hint-text">Or the simple format: Subject | Task Title — everything else defaults (Type: Other, Status: Not Started, Priority: Medium, no due date). New subjects are created automatically; duplicate tasks (same subject + title) are skipped.</p>
+    </div>
+
+    <div id="study-subjects-list"></div>
   </section>
 
   <!-- ===================== LISTENING TAB ===================== -->
@@ -242,9 +257,18 @@ Buddy Guy | Damn Right, I've Got the Blues</pre>
   <option value="Rhythm solid"></option>
   <option value="Maintenance"></option>
 </datalist>
+<datalist id="study-type-suggestions">
+  <option value="Assignment"></option>
+  <option value="Reading"></option>
+  <option value="Quiz"></option>
+  <option value="Exam"></option>
+  <option value="Project"></option>
+  <option value="Video"></option>
+  <option value="Other"></option>
+</datalist>
 
 <!-- ===================== SUPABASE (CDN, no build step) ===================== -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-<script src="script.js?v=2"></script>
+<script src="script.js?v=3"></script>
 </body>
 </html>
