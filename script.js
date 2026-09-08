@@ -588,6 +588,8 @@
 
   // ===================== DASHBOARD =====================
 
+  // Each entry carries stable navigation metadata (module + id, never text)
+  // so a click can locate the exact underlying record — see navigateToItem().
   function computeAttentionItems() {
     var items = [];
     var today = todayISO();
@@ -600,12 +602,12 @@
         var createdDateIso = g.createdAt ? g.createdAt.slice(0, 10) : null;
         var ageDays = createdDateIso ? daysBetween(createdDateIso, today) : ATTENTION_DAYS_THRESHOLD;
         if (ageDays >= ATTENTION_DAYS_THRESHOLD) {
-          items.push("🎸 " + g.title + " — never practiced");
+          items.push({ module: "guitar", itemId: g.id, label: "🎸 " + g.title + " — never practiced" });
         }
       } else {
         var days = daysBetween(g.lastPracticed, today);
         if (days >= ATTENTION_DAYS_THRESHOLD) {
-          items.push("🎸 " + g.title + " — last practiced " + days + " days ago");
+          items.push({ module: "guitar", itemId: g.id, label: "🎸 " + g.title + " — last practiced " + days + " days ago" });
         }
       }
     });
@@ -615,11 +617,11 @@
       var subjectName = studySubjectName(t.subjectId);
       var label = "📚 " + (subjectName ? subjectName + ": " : "") + t.title;
       if (!t.lastWorkedOn) {
-        items.push(label + " — never worked on");
+        items.push({ module: "study", subjectId: t.subjectId, itemId: t.id, label: label + " — never worked on" });
       } else {
-        var days = daysBetween(t.lastWorkedOn, today);
-        if (days >= ATTENTION_DAYS_THRESHOLD) {
-          items.push(label + " — last worked on " + days + " days ago");
+        var studyDays = daysBetween(t.lastWorkedOn, today);
+        if (studyDays >= ATTENTION_DAYS_THRESHOLD) {
+          items.push({ module: "study", subjectId: t.subjectId, itemId: t.id, label: label + " — last worked on " + studyDays + " days ago" });
         }
       }
     });
@@ -630,17 +632,86 @@
       if (!r.date) missing.push("date");
       if (!r.location) missing.push("location");
       if (missing.length) {
-        items.push("🏁 " + r.name + " — missing " + missing.join(" and "));
+        items.push({ module: "races", itemId: r.id, label: "🏁 " + r.name + " — missing " + missing.join(" and ") });
       }
     });
 
     state.trainingSessions.forEach(function (s) {
       if (!s.completed && s.date < today) {
-        items.push("🏋 " + s.title + " (" + formatDateNice(s.date) + ") — incomplete, past due");
+        items.push({ module: "training", itemId: s.id, label: "🏋 " + s.title + " (" + formatDateNice(s.date) + ") — incomplete, past due" });
       }
     });
 
     return items;
+  }
+
+  // Opens the target module tab, ensures the record is actually visible
+  // (clearing a filter that would hide it), then scrolls it into view and
+  // briefly highlights it. Always locates the element by its stable id
+  // attribute — never by matching visible text.
+  var HIGHLIGHT_MS = 2000;
+
+  function highlightElement(el) {
+    if (!el) return;
+    el.classList.remove("dashboard-target-highlight");
+    // Force reflow so re-adding the class restarts the CSS fade animation
+    // even if this same element was highlighted moments ago.
+    void el.offsetWidth;
+    el.classList.add("dashboard-target-highlight");
+    clearTimeout(el._highlightTimer);
+    el._highlightTimer = setTimeout(function () {
+      el.classList.remove("dashboard-target-highlight");
+    }, HIGHLIGHT_MS);
+  }
+
+  function scrollAndHighlight(selector) {
+    // Two nested rAFs: the first runs after the browser has committed the
+    // render triggered just before this call; the second guarantees layout
+    // for scrollIntoView is up to date before we measure/scroll.
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        var el = document.querySelector(selector);
+        if (!el) return;
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        highlightElement(el);
+      });
+    });
+  }
+
+  function navigateToItem(item) {
+    if (!item || !item.module || !item.itemId) return;
+    setActiveTab(item.module);
+
+    if (item.module === "guitar") {
+      renderGuitar();
+      scrollAndHighlight('[data-guitar-id="' + item.itemId + '"]');
+    } else if (item.module === "training") {
+      renderTraining();
+      scrollAndHighlight('[data-training-id="' + item.itemId + '"]');
+    } else if (item.module === "races") {
+      var race = state.races.find(function (r) { return r.id === item.itemId; });
+      if (race && raceFilter !== "All" && raceFilter !== race.status) {
+        raceFilter = "All";
+        var raceFilterEl = document.getElementById("race-status-filter");
+        if (raceFilterEl) raceFilterEl.value = "All";
+      }
+      renderRaces();
+      scrollAndHighlight('[data-race-id="' + item.itemId + '"]');
+    } else if (item.module === "study") {
+      // Subjects always render fully expanded (no collapse state exists),
+      // so the target task is already in the DOM once renderStudy() runs.
+      renderStudy();
+      scrollAndHighlight('[data-study-task-id="' + item.itemId + '"]');
+    } else if (item.module === "listening") {
+      var album = state.listening.find(function (a) { return a.id === item.itemId; });
+      if (album && listeningFilter !== "All" && listeningFilter !== album.status) {
+        listeningFilter = "All";
+        var listeningFilterEl = document.getElementById("listening-status-filter");
+        if (listeningFilterEl) listeningFilterEl.value = "All";
+      }
+      renderListening();
+      scrollAndHighlight('[data-listening-id="' + item.itemId + '"]');
+    }
   }
 
   function renderTodayTrainingCard() {
@@ -707,12 +778,23 @@
       '<h3 class="card-title">Items Needing Attention</h3>' +
       (items.length
         ? '<ul class="attention-list">' +
-          visible.map(function (text) {
-            return "<li>" + escapeHtml(text) + "</li>";
+          visible.map(function (item, idx) {
+            return (
+              '<li><button type="button" class="attention-item" data-attention-index="' + idx + '" aria-label="Open ' + escapeHtml(item.label) + '">' +
+              escapeHtml(item.label) +
+              "</button></li>"
+            );
           }).join("") +
           "</ul>" +
           (extra > 0 ? '<p class="hint-text">+' + extra + " more</p>" : "")
         : '<p class="card-subtext">Nothing needs attention right now.</p>');
+
+    card.querySelectorAll("[data-attention-index]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var item = visible[Number(btn.getAttribute("data-attention-index"))];
+        if (item) navigateToItem(item);
+      });
+    });
   }
 
   function renderDashboard() {
@@ -881,7 +963,7 @@
         var toggleLabel = running ? "⏸ Pause" : isActive ? "▶ Resume" : "▶ Start";
 
         return (
-          '<div class="item-card" data-id="' + item.id + '">' +
+          '<div class="item-card" data-id="' + item.id + '" data-guitar-id="' + item.id + '">' +
           '<div class="item-card-header">' +
           '<div>' +
           '<div class="item-card-title">' + escapeHtml(item.title) + "</div>" +
@@ -1255,7 +1337,7 @@
       .map(function (s) {
         var meta = getSportMeta(s.sport);
         return (
-          '<div class="session-row' + (s.completed ? " completed" : "") + '" data-id="' + s.id + '" style="border-left: 4px solid ' + meta.color + '">' +
+          '<div class="session-row' + (s.completed ? " completed" : "") + '" data-id="' + s.id + '" data-training-id="' + s.id + '" style="border-left: 4px solid ' + meta.color + '">' +
           '<input type="checkbox" data-toggle-session="' + s.id + '" ' + (s.completed ? "checked" : "") + ">" +
           '<span class="session-sport-icon" title="' + escapeHtml(s.sport) + '">' + meta.icon + "</span>" +
           '<div class="session-row-main">' +
@@ -1424,7 +1506,7 @@
       .map(function (r) {
         var badgeClass = "badge-" + r.status.toLowerCase().replace(/\s+/g, "-");
         return (
-          '<div class="item-card" data-id="' + r.id + '">' +
+          '<div class="item-card" data-id="' + r.id + '" data-race-id="' + r.id + '">' +
           '<div class="item-card-header">' +
           '<div>' +
           '<div class="item-card-title">' + escapeHtml(r.name) + "</div>" +
@@ -1593,7 +1675,7 @@
               .map(function (t) {
                 var overdue = !!(t.dueDate && t.dueDate < today && t.status !== "Completed");
                 return (
-                  '<div class="study-task-row' + (t.status === "Completed" ? " completed" : "") + '" data-id="' + t.id + '">' +
+                  '<div class="study-task-row' + (t.status === "Completed" ? " completed" : "") + '" data-id="' + t.id + '" data-study-task-id="' + t.id + '">' +
                   '<input type="checkbox" data-toggle-task="' + t.id + '" ' + (t.status === "Completed" ? "checked" : "") + ">" +
                   '<div class="study-task-main">' +
                   '<div class="study-task-title">' + escapeHtml(t.title) + "</div>" +
@@ -1618,7 +1700,7 @@
           : '<div class="empty-state">No tasks yet.</div>';
 
         return (
-          '<div class="card study-subject-card" data-subject-id="' + subj.id + '">' +
+          '<div class="card study-subject-card" data-subject-id="' + subj.id + '" data-study-subject-id="' + subj.id + '">' +
           '<div class="study-subject-header">' +
           "<div>" +
           '<h3 class="card-title">' + escapeHtml(subj.name) + "</h3>" +
@@ -2035,7 +2117,7 @@
     el.innerHTML = sorted
       .map(function (a) {
         return (
-          '<div class="item-card" data-id="' + a.id + '">' +
+          '<div class="item-card" data-id="' + a.id + '" data-listening-id="' + a.id + '">' +
           '<div class="item-card-header">' +
           '<div>' +
           '<div class="item-card-title">' + escapeHtml(a.album) + "</div>" +

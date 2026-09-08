@@ -22,6 +22,7 @@
   --text: #1c1f24;
   --text-muted: #666d78;
   --accent: #4f6df5;
+  --accent-rgb: 79, 109, 245;
   --accent-text: #ffffff;
   --danger: #d64545;
   --success: #2f9e58;
@@ -36,6 +37,7 @@ body[data-theme="dark"] {
   --text: #edeef0;
   --text-muted: #9a9fa8;
   --accent: #7c93ff;
+  --accent-rgb: 124, 147, 255;
   --accent-text: #10121a;
   --danger: #ef6a6a;
   --success: #55c67e;
@@ -383,13 +385,43 @@ body[data-theme="dark"] .rating-stars {
 }
 
 .attention-list li {
+  padding: 0;
+}
+
+.attention-item {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
   font-size: 0.85rem;
   padding: 10px 12px;
   min-height: var(--tap-min);
   display: flex;
   align-items: center;
   background: var(--bg-subtle);
+  border: 1px solid transparent;
   border-radius: 8px;
+  cursor: pointer;
+}
+
+.attention-item:hover,
+.attention-item:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* ===================== DASHBOARD DRILL-DOWN HIGHLIGHT ===================== */
+@keyframes dashboard-highlight-fade {
+  0% { box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.35); outline-color: var(--accent); }
+  70% { box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.35); outline-color: var(--accent); }
+  100% { box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0); outline-color: rgba(var(--accent-rgb), 0); }
+}
+
+.dashboard-target-highlight {
+  outline: 3px solid transparent;
+  outline-offset: 3px;
+  border-radius: 10px;
+  animation: dashboard-highlight-fade 2s ease-out forwards;
 }
 
 /* ===================== CONFIDENCE BAR ===================== */
