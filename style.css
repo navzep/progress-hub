@@ -189,6 +189,7 @@ body {
 .tab-button[data-tab="races"] { --tab-color: #ea580c; --tab-color-rgb: 234, 88, 12; }
 .tab-button[data-tab="study"] { --tab-color: #0891b2; --tab-color-rgb: 8, 145, 178; }
 .tab-button[data-tab="listening"] { --tab-color: #d97706; --tab-color-rgb: 217, 119, 6; }
+.tab-button[data-tab="codingProjects"] { --tab-color: #4338ca; --tab-color-rgb: 67, 56, 202; }
 
 body[data-theme="dark"] .tab-button[data-tab="dashboard"] { --tab-color: #60a5fa; --tab-color-rgb: 96, 165, 250; }
 body[data-theme="dark"] .tab-button[data-tab="guitar"] { --tab-color: #e879f9; --tab-color-rgb: 232, 121, 249; }
@@ -196,6 +197,7 @@ body[data-theme="dark"] .tab-button[data-tab="training"] { --tab-color: #4ade80;
 body[data-theme="dark"] .tab-button[data-tab="races"] { --tab-color: #fb923c; --tab-color-rgb: 251, 146, 60; }
 body[data-theme="dark"] .tab-button[data-tab="study"] { --tab-color: #22d3ee; --tab-color-rgb: 34, 211, 238; }
 body[data-theme="dark"] .tab-button[data-tab="listening"] { --tab-color: #fbbf24; --tab-color-rgb: 251, 191, 36; }
+body[data-theme="dark"] .tab-button[data-tab="codingProjects"] { --tab-color: #818cf8; --tab-color-rgb: 129, 140, 248; }
 
 body[data-theme="dark"] .tab-button:not(.active) {
   color: #b9bec7;
@@ -357,6 +359,13 @@ body[data-theme="dark"] .tab-button:not(.active) {
 .badge-priority-medium { background: rgba(230, 160, 40, 0.18); color: #c58a1f; }
 .badge-priority-high { background: rgba(214, 69, 69, 0.15); color: var(--danger); }
 
+.badge-idea { background: var(--bg-subtle); color: var(--text-muted); }
+.badge-planning { background: rgba(230, 160, 40, 0.18); color: #c58a1f; }
+.badge-building { background: rgba(217, 119, 6, 0.18); color: #d97706; }
+.badge-testing { background: rgba(124, 147, 255, 0.18); color: var(--accent); }
+.badge-paused { background: var(--bg-subtle); color: var(--text-muted); }
+.badge-parked { background: var(--bg-subtle); color: var(--text-muted); }
+
 .rating-stars {
   color: #d97706;
   font-size: 0.95rem;
@@ -473,6 +482,7 @@ body[data-theme="dark"] .rating-stars {
 .stat-card[data-color="next-race"] { --card-color: #2563eb; --card-color-rgb: 37, 99, 235; }
 .stat-card[data-color="study"] { --card-color: #0891b2; --card-color-rgb: 8, 145, 178; }
 .stat-card[data-color="listening"] { --card-color: #d97706; --card-color-rgb: 217, 119, 6; }
+.stat-card[data-color="coding-projects"] { --card-color: #4338ca; --card-color-rgb: 67, 56, 202; }
 
 body[data-theme="dark"] .stat-card[data-color="guitar"] { --card-color: #e879f9; --card-color-rgb: 232, 121, 249; }
 body[data-theme="dark"] .stat-card[data-color="training"] { --card-color: #4ade80; --card-color-rgb: 74, 222, 128; }
@@ -480,6 +490,7 @@ body[data-theme="dark"] .stat-card[data-color="race-pipeline"] { --card-color: #
 body[data-theme="dark"] .stat-card[data-color="next-race"] { --card-color: #60a5fa; --card-color-rgb: 96, 165, 250; }
 body[data-theme="dark"] .stat-card[data-color="study"] { --card-color: #22d3ee; --card-color-rgb: 34, 211, 238; }
 body[data-theme="dark"] .stat-card[data-color="listening"] { --card-color: #fbbf24; --card-color-rgb: 251, 191, 36; }
+body[data-theme="dark"] .stat-card[data-color="coding-projects"] { --card-color: #818cf8; --card-color-rgb: 129, 140, 248; }
 
 .stat-card {
   background: linear-gradient(180deg, rgba(var(--card-color-rgb, 100, 100, 100), 0.1), transparent 65%), var(--bg-elevated);

@@ -45,9 +45,12 @@
   var ATTENTION_DAYS_THRESHOLD = 7;
   var ATTENTION_VISIBLE_CAP = 5;
   var LISTENING_STATUSES = ["To Listen", "Listening", "Finished", "Revisit"];
+  var CODING_PROJECT_STATUSES = ["Idea", "Planning", "Building", "Testing", "Paused", "Completed", "Parked"];
+  var CODING_PROJECT_TYPES = ["Web App", "Python", "Data Science", "Automation", "Work Tool", "Mobile / PWA", "Other"];
 
   var raceFilter = "All";
   var listeningFilter = "All";
+  var codingProjectFilter = "All";
 
   var activeTimer = {
     itemId: null,
@@ -194,6 +197,46 @@
     return albums;
   }
 
+  function seedCodingProjects() {
+    var now = new Date().toISOString();
+    return [
+      {
+        id: generateId(),
+        name: "Progress Hub",
+        type: "Web App",
+        status: "Building",
+        priority: "High",
+        progress: 90,
+        techStack: "HTML, CSS, JavaScript, Supabase, GitHub Pages",
+        milestone: "Stabilize v2",
+        nextAction: "Run full code review and regression testing",
+        githubUrl: "",
+        liveUrl: "",
+        notes: "",
+        lastWorkedOn: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: generateId(),
+        name: "CSV QuickLook",
+        type: "Data Science",
+        status: "Idea",
+        priority: "Medium",
+        progress: 0,
+        techStack: "",
+        milestone: "Define MVP",
+        nextAction: "Build CSV upload and basic analysis prototype",
+        githubUrl: "",
+        liveUrl: "",
+        notes: "",
+        lastWorkedOn: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ];
+  }
+
   // ===================== STATE =====================
 
   function defaultState() {
@@ -205,6 +248,7 @@
       listening: [],
       studySubjects: [],
       studyTasks: [],
+      codingProjects: [],
     };
   }
 
@@ -276,6 +320,7 @@
       races: Array.isArray(parsed.races) ? parsed.races : [],
       studyTopics: Array.isArray(parsed.studyTopics) ? parsed.studyTopics : [],
       listening: Array.isArray(parsed.listening) ? parsed.listening : [],
+      codingProjects: Array.isArray(parsed.codingProjects) ? parsed.codingProjects : [],
     };
     migrateStudyShape(parsed, normalized);
     return normalized;
@@ -289,7 +334,7 @@
     if (!coreOk) return false;
     // These are optional for backward compatibility with exports made
     // before each module existed — but if present, must be arrays.
-    var optionalArrayKeys = ["listening", "studySubjects", "studyTasks"];
+    var optionalArrayKeys = ["listening", "studySubjects", "studyTasks", "codingProjects"];
     for (var i = 0; i < optionalArrayKeys.length; i++) {
       var key = optionalArrayKeys[i];
       if (Object.prototype.hasOwnProperty.call(parsed, key) && !Array.isArray(parsed[key])) {
@@ -306,6 +351,7 @@
       seeded.guitarItems = seedGuitarItems();
       seeded.races = seedRaces();
       seeded.listening = seedListening();
+      seeded.codingProjects = seedCodingProjects();
       localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded));
       return seeded;
     }
@@ -313,15 +359,18 @@
       var parsed = JSON.parse(raw);
       var hadListening = parsed && Array.isArray(parsed.listening);
       var hadStudyGrouping = parsed && (Array.isArray(parsed.studySubjects) || Array.isArray(parsed.studyTasks));
+      var hadCodingProjects = parsed && Array.isArray(parsed.codingProjects);
       var normalized = normalizeState(parsed);
-      if (!hadListening || !hadStudyGrouping) {
+      if (!hadListening || !hadStudyGrouping || !hadCodingProjects) {
         // One-time migrations: an existing saved user predating the
-        // Listening module (add the starter library), and/or predating the
-        // Study Subjects/Tasks grouping (already folded into `normalized`
-        // by normalizeState). Persist immediately so the result — not a
+        // Listening module (add the starter library), predating the Study
+        // Subjects/Tasks grouping (already folded into `normalized` by
+        // normalizeState), and/or predating the Coding Projects module (add
+        // the starter projects). Persist immediately so the result — not a
         // freshly re-migrated copy with new random ids — is what's read
         // back next time.
         if (!hadListening) normalized.listening = seedListening();
+        if (!hadCodingProjects) normalized.codingProjects = seedCodingProjects();
         localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
       }
       return normalized;
@@ -342,6 +391,12 @@
   function findGuitarItem(id) {
     return state.guitarItems.find(function (i) {
       return i.id === id;
+    });
+  }
+
+  function findCodingProject(id) {
+    return state.codingProjects.find(function (p) {
+      return p.id === id;
     });
   }
 
@@ -642,6 +697,41 @@
       }
     });
 
+    // Parked/Completed/Paused and normal Idea-stage projects are never
+    // flagged — only Building, Testing, or high-priority Planning projects
+    // that have gone quiet, plus anything with a defined next action that
+    // hasn't been touched in a while.
+    state.codingProjects.forEach(function (p) {
+      if (p.status === "Completed" || p.status === "Parked" || p.status === "Paused" || p.status === "Idea") return;
+
+      var inactiveDays;
+      if (p.lastWorkedOn) {
+        inactiveDays = daysBetween(p.lastWorkedOn, today);
+      } else {
+        // Grace period: don't flag a never-worked-on project until it has
+        // existed for at least ATTENTION_DAYS_THRESHOLD days, same pattern
+        // as the guitar "never practiced" grace period above.
+        var createdDateIso = p.createdAt ? p.createdAt.slice(0, 10) : null;
+        inactiveDays = createdDateIso ? daysBetween(createdDateIso, today) : ATTENTION_DAYS_THRESHOLD;
+      }
+      if (inactiveDays < ATTENTION_DAYS_THRESHOLD) return;
+
+      var activitySuffix = p.lastWorkedOn ? "last worked on " + inactiveDays + " days ago" : "never worked on";
+      var reason = null;
+      if (p.status === "Building") {
+        reason = activitySuffix;
+      } else if (p.status === "Testing") {
+        reason = "in testing, " + activitySuffix;
+      } else if (p.status === "Planning" && p.priority === "High") {
+        reason = "high priority, " + activitySuffix;
+      } else if (p.nextAction) {
+        reason = "next action pending, " + activitySuffix;
+      }
+      if (reason) {
+        items.push({ module: "codingProjects", itemId: p.id, label: "💻 " + p.name + " — " + reason });
+      }
+    });
+
     return items;
   }
 
@@ -711,6 +801,15 @@
       }
       renderListening();
       scrollAndHighlight('[data-listening-id="' + item.itemId + '"]');
+    } else if (item.module === "codingProjects") {
+      var project = findCodingProject(item.itemId);
+      if (project && codingProjectFilter !== "All" && !codingProjectMatchesFilter(project)) {
+        codingProjectFilter = "All";
+        var codingProjectFilterEl = document.getElementById("coding-project-status-filter");
+        if (codingProjectFilterEl) codingProjectFilterEl.value = "All";
+      }
+      renderCodingProjects();
+      scrollAndHighlight('[data-coding-project-id="' + item.itemId + '"]');
     }
   }
 
@@ -815,6 +914,54 @@
     });
   }
 
+  // Highlights a single "what to do next" project on the dashboard: the
+  // most recently touched Building project that has a defined next action.
+  // Purely a convenience surface — clicking it reuses the same
+  // navigateToItem() drill-down as attention items, no separate nav system.
+  function renderNextCodingActionCard() {
+    var section = document.querySelector('.tab-section[data-section="dashboard"]');
+    if (!section) return;
+    var card = document.getElementById("dashboard-next-coding-action");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "dashboard-next-coding-action";
+      card.className = "card";
+      var dataCard = section.querySelector(".data-card");
+      section.insertBefore(card, dataCard);
+    }
+
+    var candidates = state.codingProjects.filter(function (p) {
+      return p.status === "Building" && p.nextAction;
+    });
+    candidates.sort(function (a, b) {
+      return (b.updatedAt || "").localeCompare(a.updatedAt || "");
+    });
+    var next = candidates[0];
+
+    if (!next) {
+      card.hidden = true;
+      card.innerHTML = "";
+      return;
+    }
+
+    card.hidden = false;
+    card.innerHTML =
+      '<h3 class="card-title">Next Project Action</h3>' +
+      '<button type="button" class="session-row" data-next-coding-action-id="' + next.id + '" aria-label="Open ' + escapeHtml(next.name) + ' in Coding Projects">' +
+      '<div class="session-row-main">' +
+      '<div class="session-row-title">' + escapeHtml(next.name) + "</div>" +
+      '<div class="session-row-meta">' + escapeHtml(next.nextAction) + "</div>" +
+      "</div>" +
+      "</button>";
+
+    var btn = card.querySelector("[data-next-coding-action-id]");
+    if (btn) {
+      btn.addEventListener("click", function () {
+        navigateToItem({ module: "codingProjects", itemId: next.id });
+      });
+    }
+  }
+
   function renderDashboard() {
     var el = document.getElementById("dashboard-content");
     var today = todayISO();
@@ -879,6 +1026,19 @@
     var listeningValue = currentlyListening ? currentlyListening.album : "Nothing currently playing";
     var listeningSub = (upNextAlbum ? "Up next: " + upNextAlbum.album : "Listening queue empty") + " · " + totalFinishedAlbums + " finished";
 
+    var activeCodingCount = state.codingProjects.filter(function (p) {
+      return p.status === "Building";
+    }).length;
+    var plannedCodingCount = state.codingProjects.filter(function (p) {
+      return p.status === "Idea" || p.status === "Planning";
+    }).length;
+    var parkedCodingCount = state.codingProjects.filter(function (p) {
+      return p.status === "Parked";
+    }).length;
+    var recentCodingCount = state.codingProjects.filter(function (p) {
+      return p.lastWorkedOn && daysBetween(p.lastWorkedOn, today) <= ATTENTION_DAYS_THRESHOLD;
+    }).length;
+
     var cards = [
       {
         tab: "guitar",
@@ -924,6 +1084,13 @@
         value: listeningValue,
         sub: listeningSub,
       },
+      {
+        tab: "codingProjects",
+        color: "coding-projects",
+        label: "💻 Coding Projects",
+        value: activeCodingCount + " Active",
+        sub: plannedCodingCount + " Planned · " + parkedCodingCount + " Parked · " + recentCodingCount + " worked on recently",
+      },
     ];
 
     el.innerHTML = cards
@@ -946,6 +1113,7 @@
 
     renderTodayTrainingCard();
     renderAttentionCard();
+    renderNextCodingActionCard();
   }
 
   // ===================== GUITAR =====================
@@ -2346,6 +2514,393 @@
     });
   }
 
+  // ===================== CODING PROJECTS =====================
+
+  function codingProjectMatchesFilter(p) {
+    if (codingProjectFilter === "All") return true;
+    if (codingProjectFilter === "Active") return p.status === "Building";
+    if (codingProjectFilter === "Planned") return p.status === "Idea" || p.status === "Planning";
+    return p.status === codingProjectFilter;
+  }
+
+  function renderCodingProjects() {
+    var el = document.getElementById("coding-projects-list");
+    var filtered = state.codingProjects.filter(codingProjectMatchesFilter);
+
+    if (!filtered.length) {
+      el.innerHTML = '<div class="empty-state">No coding projects' + (codingProjectFilter !== "All" ? ' matching "' + escapeHtml(codingProjectFilter) + '"' : "") + ". Add one to start tracking.</div>";
+      return;
+    }
+
+    var sorted = filtered.slice().sort(function (a, b) {
+      return (b.updatedAt || "").localeCompare(a.updatedAt || "");
+    });
+
+    el.innerHTML = sorted
+      .map(function (p) {
+        var linksHtml = "";
+        if (p.githubUrl || p.liveUrl) {
+          linksHtml =
+            '<div class="button-row">' +
+            (p.githubUrl ? '<a class="button button-secondary button-small" href="' + escapeHtml(p.githubUrl) + '" target="_blank" rel="noopener noreferrer">GitHub</a>' : "") +
+            (p.liveUrl ? '<a class="button button-secondary button-small" href="' + escapeHtml(p.liveUrl) + '" target="_blank" rel="noopener noreferrer">Live App</a>' : "") +
+            "</div>";
+        }
+        return (
+          '<div class="item-card" data-id="' + p.id + '" data-coding-project-id="' + p.id + '">' +
+          '<div class="item-card-header">' +
+          '<div>' +
+          '<div class="item-card-title">' + escapeHtml(p.name) + "</div>" +
+          '<div class="item-card-meta">' + escapeHtml(p.type) + " · " + escapeHtml(p.priority) + " priority</div>" +
+          "</div>" +
+          '<span class="badge ' + taskStatusBadgeClass(p.status) + '">' + escapeHtml(p.status) + "</span>" +
+          "</div>" +
+          confidenceBarHtml(p.progress, "Progress") +
+          (p.milestone ? '<div class="item-card-meta">🎯 ' + escapeHtml(p.milestone) + "</div>" : "") +
+          (p.nextAction ? '<div class="item-card-meta">➡ ' + escapeHtml(p.nextAction) + "</div>" : "") +
+          '<div class="item-card-meta">Last worked on: ' + (p.lastWorkedOn ? formatDateNice(p.lastWorkedOn) : "Never") + "</div>" +
+          (p.techStack ? '<div class="item-card-meta">🛠 ' + escapeHtml(p.techStack) + "</div>" : "") +
+          (p.notes ? '<div class="item-card-notes">' + escapeHtml(p.notes) + "</div>" : "") +
+          linksHtml +
+          '<div class="item-card-actions">' +
+          '<button class="button button-primary button-small" data-worked-today="' + p.id + '" type="button">Worked On Today</button>' +
+          '<button class="button button-secondary button-small" data-edit-coding-project="' + p.id + '" type="button">Edit</button>' +
+          '<button class="button button-danger button-small" data-delete-coding-project="' + p.id + '" type="button">Delete</button>' +
+          "</div>" +
+          "</div>"
+        );
+      })
+      .join("");
+
+    el.querySelectorAll("[data-worked-today]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-worked-today");
+        var project = findCodingProject(id);
+        if (!project) return;
+        project.lastWorkedOn = todayISO();
+        project.updatedAt = new Date().toISOString();
+        saveState();
+        renderAll();
+        showToast(project.name + " marked worked on today");
+      });
+    });
+    el.querySelectorAll("[data-edit-coding-project]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        openCodingProjectModal(btn.getAttribute("data-edit-coding-project"));
+      });
+    });
+    el.querySelectorAll("[data-delete-coding-project]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-delete-coding-project");
+        if (!confirm("Delete this coding project?")) return;
+        state.codingProjects = state.codingProjects.filter(function (p) {
+          return p.id !== id;
+        });
+        saveState();
+        renderAll();
+        showToast("Project deleted");
+      });
+    });
+  }
+
+  function codingProjectFieldsHtml(project) {
+    project = project || {
+      name: "",
+      type: "Other",
+      status: "Idea",
+      priority: "Medium",
+      progress: 0,
+      techStack: "",
+      milestone: "",
+      nextAction: "",
+      githubUrl: "",
+      liveUrl: "",
+      notes: "",
+    };
+    return (
+      '<div class="form-group">' +
+      '<label for="cpf-name">Project Name</label>' +
+      '<input id="cpf-name" name="name" type="text" required value="' + escapeHtml(project.name) + '">' +
+      "</div>" +
+      '<div class="form-row">' +
+      '<div class="form-group">' +
+      '<label for="cpf-type">Type</label>' +
+      '<select id="cpf-type" name="type">' +
+      CODING_PROJECT_TYPES.map(function (t) {
+        return '<option value="' + t + '"' + (project.type === t ? " selected" : "") + ">" + t + "</option>";
+      }).join("") +
+      "</select>" +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="cpf-status">Status</label>' +
+      '<select id="cpf-status" name="status">' +
+      CODING_PROJECT_STATUSES.map(function (s) {
+        return '<option value="' + s + '"' + (project.status === s ? " selected" : "") + ">" + s + "</option>";
+      }).join("") +
+      "</select>" +
+      "</div>" +
+      "</div>" +
+      '<div class="form-row">' +
+      '<div class="form-group">' +
+      '<label for="cpf-priority">Priority</label>' +
+      '<select id="cpf-priority" name="priority">' +
+      TASK_PRIORITIES.map(function (p) {
+        return '<option value="' + p + '"' + (project.priority === p ? " selected" : "") + ">" + p + "</option>";
+      }).join("") +
+      "</select>" +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="cpf-progress">Progress <span class="range-value" id="cpf-progress-value">' + (Number(project.progress) || 0) + '%</span></label>' +
+      '<input id="cpf-progress" name="progress" type="range" min="0" max="100" step="5" value="' + (Number(project.progress) || 0) + '">' +
+      "</div>" +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="cpf-techstack">Tech Stack</label>' +
+      '<input id="cpf-techstack" name="techStack" type="text" placeholder="e.g. HTML, CSS, JavaScript" value="' + escapeHtml(project.techStack) + '">' +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="cpf-milestone">Current Milestone</label>' +
+      '<input id="cpf-milestone" name="milestone" type="text" value="' + escapeHtml(project.milestone) + '">' +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="cpf-next-action">Next Action</label>' +
+      '<input id="cpf-next-action" name="nextAction" type="text" value="' + escapeHtml(project.nextAction) + '">' +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="cpf-github">GitHub Repository URL</label>' +
+      '<input id="cpf-github" name="githubUrl" type="url" placeholder="https://github.com/..." value="' + escapeHtml(project.githubUrl) + '">' +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="cpf-live">Live App URL</label>' +
+      '<input id="cpf-live" name="liveUrl" type="url" placeholder="https://..." value="' + escapeHtml(project.liveUrl) + '">' +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="cpf-notes">Notes</label>' +
+      '<textarea id="cpf-notes" name="notes" rows="3">' + escapeHtml(project.notes) + "</textarea>" +
+      "</div>"
+    );
+  }
+
+  function openCodingProjectModal(id) {
+    var project = id ? findCodingProject(id) : null;
+    openModal(
+      project ? "Edit Coding Project" : "Add Coding Project",
+      codingProjectFieldsHtml(project),
+      function (formData) {
+        var status = formData.get("status");
+        var progress = Math.max(0, Math.min(100, Number(formData.get("progress")) || 0));
+
+        // Completed defaults to 100% — but only auto-applies when progress
+        // wasn't deliberately changed away from the prior saved value in
+        // this same edit; otherwise ask before overwriting what was typed.
+        if (status === "Completed" && progress !== 100) {
+          var progressUnchanged = !project || Number(project.progress) === progress;
+          if (progressUnchanged) {
+            progress = 100;
+          } else if (confirm("Status is Completed but progress is " + progress + "%. Set progress to 100%?")) {
+            progress = 100;
+          }
+        }
+
+        var data = {
+          name: formData.get("name").trim(),
+          type: formData.get("type"),
+          status: status,
+          priority: formData.get("priority"),
+          progress: progress,
+          techStack: formData.get("techStack").trim(),
+          milestone: formData.get("milestone").trim(),
+          nextAction: formData.get("nextAction").trim(),
+          githubUrl: formData.get("githubUrl").trim(),
+          liveUrl: formData.get("liveUrl").trim(),
+          notes: formData.get("notes").trim(),
+          updatedAt: new Date().toISOString(),
+        };
+        if (!data.name) return;
+        if (project) {
+          data.lastWorkedOn = project.lastWorkedOn || null;
+          data.createdAt = project.createdAt || project.updatedAt || data.updatedAt;
+          Object.assign(project, data);
+        } else {
+          data.id = generateId();
+          data.lastWorkedOn = null;
+          data.createdAt = data.updatedAt;
+          state.codingProjects.push(data);
+        }
+        saveState();
+        renderAll();
+        closeModal();
+        showToast(project ? "Project updated" : "Project added");
+      },
+      function (form) {
+        var range = form.querySelector("#cpf-progress");
+        var label = form.querySelector("#cpf-progress-value");
+        if (range && label) {
+          range.addEventListener("input", function () {
+            label.textContent = range.value + "%";
+          });
+        }
+      }
+    );
+  }
+
+  function initCodingProjectFilter() {
+    document.getElementById("coding-project-status-filter").addEventListener("change", function (e) {
+      codingProjectFilter = e.target.value;
+      renderCodingProjects();
+    });
+  }
+
+  function codingProjectDupKey(name) {
+    return (name || "").trim().toLowerCase();
+  }
+
+  function parseCodingProjectsPasteText(text) {
+    var lines = text
+      .split("\n")
+      .map(function (l) {
+        return l.trim();
+      })
+      .filter(Boolean);
+    var rows = [];
+    var invalidTypeCount = 0;
+    var invalidStatusCount = 0;
+    var invalidPriorityCount = 0;
+    var invalidProgressCount = 0;
+
+    lines.forEach(function (line) {
+      var parts = line.split("|").map(function (p) {
+        return p.trim();
+      });
+      if (parts.length < 2) return;
+
+      var name = parts[0];
+      var type, status, priority, progress, nextAction;
+
+      if (parts.length === 2) {
+        // Simple format: Project Name | Next Action
+        type = "Other";
+        status = "Idea";
+        priority = "Medium";
+        progress = 0;
+        nextAction = parts[1];
+      } else {
+        // Full format: Project Name | Type | Status | Priority | Progress | Next Action
+        var typeRaw = parts[1] || "";
+        var statusRaw = parts[2] || "";
+        var priorityRaw = parts[3] || "";
+        var progressRaw = parts[4] || "";
+        nextAction = parts[5] || "";
+
+        type = "Other";
+        if (typeRaw) {
+          if (CODING_PROJECT_TYPES.indexOf(typeRaw) !== -1) {
+            type = typeRaw;
+          } else {
+            invalidTypeCount++;
+          }
+        }
+
+        status = "Idea";
+        if (statusRaw) {
+          if (CODING_PROJECT_STATUSES.indexOf(statusRaw) !== -1) {
+            status = statusRaw;
+          } else {
+            invalidStatusCount++;
+          }
+        }
+
+        priority = "Medium";
+        if (priorityRaw) {
+          if (TASK_PRIORITIES.indexOf(priorityRaw) !== -1) {
+            priority = priorityRaw;
+          } else {
+            invalidPriorityCount++;
+          }
+        }
+
+        progress = 0;
+        if (progressRaw !== "") {
+          var n = Number(progressRaw.replace("%", ""));
+          if (!isNaN(n)) {
+            progress = Math.max(0, Math.min(100, Math.round(n)));
+          } else {
+            invalidProgressCount++;
+          }
+        }
+      }
+
+      if (!name) return;
+      rows.push({ name: name, type: type, status: status, priority: priority, progress: progress, nextAction: nextAction });
+    });
+
+    return {
+      rows: rows,
+      invalidTypeCount: invalidTypeCount,
+      invalidStatusCount: invalidStatusCount,
+      invalidPriorityCount: invalidPriorityCount,
+      invalidProgressCount: invalidProgressCount,
+    };
+  }
+
+  function initCodingProjectsPasteImporter() {
+    document.getElementById("parse-coding-projects-btn").addEventListener("click", function () {
+      var textarea = document.getElementById("coding-projects-paste-input");
+      var result = parseCodingProjectsPasteText(textarea.value);
+      if (!result.rows.length) {
+        showToast("No projects found. Check the format.");
+        return;
+      }
+
+      var existingKeys = {};
+      state.codingProjects.forEach(function (p) {
+        existingKeys[codingProjectDupKey(p.name)] = true;
+      });
+
+      var now = new Date().toISOString();
+      var added = 0;
+      var duplicates = 0;
+      result.rows.forEach(function (row) {
+        var key = codingProjectDupKey(row.name);
+        if (existingKeys[key]) {
+          duplicates++;
+          return;
+        }
+        existingKeys[key] = true;
+        state.codingProjects.push({
+          id: generateId(),
+          name: row.name,
+          type: row.type,
+          status: row.status,
+          priority: row.priority,
+          progress: row.progress,
+          techStack: "",
+          milestone: "",
+          nextAction: row.nextAction,
+          githubUrl: "",
+          liveUrl: "",
+          notes: "",
+          lastWorkedOn: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+        added++;
+      });
+
+      saveState();
+      textarea.value = "";
+      renderAll();
+
+      var msg = result.rows.length + " project(s) detected — " + added + " imported";
+      if (duplicates > 0) msg += ", " + duplicates + " duplicate(s) skipped";
+      if (result.invalidTypeCount > 0) msg += ", " + result.invalidTypeCount + " unrecognized type defaulted";
+      if (result.invalidStatusCount > 0) msg += ", " + result.invalidStatusCount + " unrecognized status defaulted";
+      if (result.invalidPriorityCount > 0) msg += ", " + result.invalidPriorityCount + " unrecognized priority defaulted";
+      if (result.invalidProgressCount > 0) msg += ", " + result.invalidProgressCount + " invalid progress defaulted to 0";
+      showToast(msg);
+    });
+  }
+
   // ===================== AUTH / CLOUD SYNC =====================
 
   function stateHasAnyData(s) {
@@ -2356,7 +2911,8 @@
       (s.races && s.races.length) ||
       (s.studyTopics && s.studyTopics.length) ||
       (s.studyTasks && s.studyTasks.length) ||
-      (s.listening && s.listening.length)
+      (s.listening && s.listening.length) ||
+      (s.codingProjects && s.codingProjects.length)
     );
   }
 
@@ -2905,6 +3461,9 @@
     document.getElementById("add-listening-album-btn").addEventListener("click", function () {
       openListeningModal(null);
     });
+    document.getElementById("add-coding-project-btn").addEventListener("click", function () {
+      openCodingProjectModal(null);
+    });
   }
 
   // ===================== RENDER ALL =====================
@@ -2916,6 +3475,7 @@
     renderRaces();
     renderStudy();
     renderListening();
+    renderCodingProjects();
   }
 
   // ===================== INIT =====================
@@ -2931,6 +3491,8 @@
     initListeningFilter();
     initListeningPasteImporter();
     initStudyPasteImporter();
+    initCodingProjectFilter();
+    initCodingProjectsPasteImporter();
     initDataButtons();
     initGlobalTimerControls();
     initAuth();

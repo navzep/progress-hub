@@ -14,7 +14,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Progress Hub">
 
-<link rel="stylesheet" href="style.css?v=5">
+<link rel="stylesheet" href="style.css?v=6">
 </head>
 <body data-theme="dark">
 
@@ -43,6 +43,7 @@
   <button class="tab-button" data-tab="races" type="button">🏁 Races</button>
   <button class="tab-button" data-tab="study" type="button">📚 Study</button>
   <button class="tab-button" data-tab="listening" type="button">🎧 Listening</button>
+  <button class="tab-button" data-tab="codingProjects" type="button">💻 Coding Projects</button>
 </nav>
 
 <main class="app-main">
@@ -226,6 +227,40 @@ Buddy Guy | Damn Right, I've Got the Blues</pre>
     <div id="listening-list" class="card-grid"></div>
   </section>
 
+  <!-- ===================== CODING PROJECTS TAB ===================== -->
+  <section class="tab-section" data-section="codingProjects">
+    <div class="section-header">
+      <h2 class="section-title">Coding Projects</h2>
+      <button id="add-coding-project-btn" class="button button-primary" type="button">+ Add Project</button>
+    </div>
+
+    <div class="form-group filter-group">
+      <label for="coding-project-status-filter">Filter by status</label>
+      <select id="coding-project-status-filter">
+        <option value="All">All</option>
+        <option value="Active">Active</option>
+        <option value="Planned">Planned</option>
+        <option value="Testing">Testing</option>
+        <option value="Paused">Paused</option>
+        <option value="Parked">Parked</option>
+        <option value="Completed">Completed</option>
+      </select>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Paste Coding Projects</h3>
+      <textarea id="coding-projects-paste-input" class="plan-paste-textarea" rows="4" placeholder="Paste your coding projects here..."></textarea>
+      <button id="parse-coding-projects-btn" class="button button-primary" type="button">Parse &amp; Import</button>
+      <p class="example-label">Expected format:</p>
+      <pre class="example-block">Progress Hub | Web App | Building | High | 90 | Run full regression test
+CSV QuickLook | Data Science | Idea | Medium | 0 | Build CSV upload prototype
+Holiday Planner | Web App | Planning | Medium | 10 | Design trip budget model</pre>
+      <p class="hint-text">Or the simple format: Project Name | Next Action — everything else defaults (Type: Other, Status: Idea, Priority: Medium, Progress: 0). Importing adds new projects; duplicates (same project name) are skipped.</p>
+    </div>
+
+    <div id="coding-projects-list" class="card-grid"></div>
+  </section>
+
 </main>
 
 <!-- ===================== SHARED MODAL (add/edit forms) ===================== -->
@@ -269,6 +304,6 @@ Buddy Guy | Damn Right, I've Got the Blues</pre>
 
 <!-- ===================== SUPABASE (CDN, no build step) ===================== -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-<script src="script.js?v=5"></script>
+<script src="script.js?v=6"></script>
 </body>
 </html>
