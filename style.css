@@ -795,11 +795,16 @@ button.session-row:focus-visible {
   outline: none;
 }
 
-.study-focus-label {
+.dashboard-focus-label {
   font-size: 0.78rem;
   font-weight: 600;
   color: var(--text-muted);
+  margin-top: 10px;
   margin-bottom: 6px;
+}
+
+.dashboard-focus-label:first-child {
+  margin-top: 0;
 }
 
 .dashboard-secondary-line {

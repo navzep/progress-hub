@@ -923,50 +923,83 @@
     });
   }
 
-  // Highlights a single "what to do next" project on the dashboard: the
-  // most recently touched Building project that has a defined next action.
-  // Purely a convenience surface — clicking it reuses the same
-  // navigateToItem() drill-down as attention items, no separate nav system.
-  function renderNextCodingActionCard() {
+  // Picks the single Coding Project the user is most likely mid-way
+  // through right now: Building or Testing, preferring whichever was
+  // worked on most recently, falling back to High priority on a tie (or
+  // when neither candidate has a lastWorkedOn date at all). Mirrors
+  // computeCurrentStudyFocus()'s selection logic exactly.
+  function computeCurrentCodingFocus() {
+    var active = state.codingProjects.filter(function (p) {
+      return p.status === "Building" || p.status === "Testing";
+    });
+    if (!active.length) return null;
+
+    var priorityRank = { High: 3, Medium: 2, Low: 1 };
+    var sorted = active.slice().sort(function (a, b) {
+      var aDate = a.lastWorkedOn || "";
+      var bDate = b.lastWorkedOn || "";
+      if (aDate !== bDate) return aDate < bDate ? 1 : -1;
+      return (priorityRank[b.priority] || 0) - (priorityRank[a.priority] || 0);
+    });
+    return { primary: sorted[0], extraCount: sorted.length - 1 };
+  }
+
+  // Shows the one Coding Project currently being worked on (see
+  // computeCurrentCodingFocus() above) as the card's primary content, with
+  // its next action underneath and project counts demoted to a secondary
+  // summary line. Reuses the existing navigateToItem() drill-down (which
+  // already knows how to clear the status filter and highlight by stable
+  // project id) — no separate navigation system.
+  function renderCodingProjectsFocusCard() {
     var section = document.querySelector('.tab-section[data-section="dashboard"]');
     if (!section) return;
-    var card = document.getElementById("dashboard-next-coding-action");
+    var card = document.getElementById("dashboard-coding-focus");
     if (!card) {
       card = document.createElement("div");
-      card.id = "dashboard-next-coding-action";
+      card.id = "dashboard-coding-focus";
       card.className = "card";
       var dataCard = section.querySelector(".data-card");
       section.insertBefore(card, dataCard);
     }
 
-    var candidates = state.codingProjects.filter(function (p) {
-      return p.status === "Building" && p.nextAction;
-    });
-    candidates.sort(function (a, b) {
-      return (b.updatedAt || "").localeCompare(a.updatedAt || "");
-    });
-    var next = candidates[0];
-
-    if (!next) {
-      card.hidden = true;
-      card.innerHTML = "";
-      return;
+    var focus = computeCurrentCodingFocus();
+    var primaryHtml;
+    if (!focus) {
+      primaryHtml = '<p class="card-subtext">No active coding project</p>';
+    } else {
+      var p = focus.primary;
+      primaryHtml =
+        '<div class="dashboard-focus-label">Currently working on:</div>' +
+        '<button type="button" class="session-row" data-coding-focus-project-id="' + p.id + '" aria-label="Open ' + escapeHtml(p.name) + ' in Coding Projects">' +
+        '<div class="session-row-main">' +
+        '<div class="session-row-title">' + escapeHtml(p.name) + "</div>" +
+        '<div class="session-row-meta">' + escapeHtml(p.status) + " · " + (Number(p.progress) || 0) + "%</div>" +
+        "</div>" +
+        "</button>" +
+        (focus.extraCount > 0 ? '<p class="hint-text">+' + focus.extraCount + " more active</p>" : "") +
+        (p.nextAction
+          ? '<div class="dashboard-focus-label">Next action:</div><p class="card-subtext">' + escapeHtml(p.nextAction) + "</p>"
+          : "");
     }
 
-    card.hidden = false;
-    card.innerHTML =
-      '<h3 class="card-title">Next Project Action</h3>' +
-      '<button type="button" class="session-row" data-next-coding-action-id="' + next.id + '" aria-label="Open ' + escapeHtml(next.name) + ' in Coding Projects">' +
-      '<div class="session-row-main">' +
-      '<div class="session-row-title">' + escapeHtml(next.name) + "</div>" +
-      '<div class="session-row-meta">' + escapeHtml(next.nextAction) + "</div>" +
-      "</div>" +
-      "</button>";
+    var totalCount = state.codingProjects.length;
+    var activeCount = state.codingProjects.filter(function (proj) {
+      return proj.status === "Building" || proj.status === "Testing";
+    }).length;
+    var plannedCount = state.codingProjects.filter(function (proj) {
+      return proj.status === "Idea" || proj.status === "Planning";
+    }).length;
+    var secondaryHtml =
+      '<p class="card-subtext dashboard-secondary-line">' +
+      totalCount + " project" + (totalCount === 1 ? "" : "s") +
+      " · " + activeCount + " active · " + plannedCount + " planned</p>";
 
-    var btn = card.querySelector("[data-next-coding-action-id]");
-    if (btn) {
-      btn.addEventListener("click", function () {
-        navigateToItem({ module: "codingProjects", itemId: next.id });
+    card.innerHTML = '<h3 class="card-title">Coding Projects</h3>' + primaryHtml + secondaryHtml;
+
+    var focusBtn = card.querySelector("[data-coding-focus-project-id]");
+    if (focusBtn) {
+      focusBtn.addEventListener("click", function () {
+        navigateToItem({ module: "codingProjects", itemId: focusBtn.getAttribute("data-coding-focus-project-id") });
       });
     }
   }
@@ -1017,7 +1050,7 @@
       var subjectName = studySubjectName(t.subjectId);
       var title = subjectName ? subjectName + " — " + t.title : t.title;
       primaryHtml =
-        '<div class="study-focus-label">Currently working on:</div>' +
+        '<div class="dashboard-focus-label">Currently working on:</div>' +
         '<button type="button" class="session-row" data-study-focus-task-id="' + t.id + '" aria-label="Open ' + escapeHtml(title) + ' in Study">' +
         '<div class="session-row-main">' +
         '<div class="session-row-title">' + escapeHtml(title) + "</div>" +
@@ -1100,19 +1133,6 @@
     var listeningValue = currentlyListening ? currentlyListening.album : "Nothing currently playing";
     var listeningSub = (upNextAlbum ? "Up next: " + upNextAlbum.album : "Listening queue empty") + " · " + totalFinishedAlbums + " finished";
 
-    var activeCodingCount = state.codingProjects.filter(function (p) {
-      return p.status === "Building";
-    }).length;
-    var plannedCodingCount = state.codingProjects.filter(function (p) {
-      return p.status === "Idea" || p.status === "Planning";
-    }).length;
-    var parkedCodingCount = state.codingProjects.filter(function (p) {
-      return p.status === "Parked";
-    }).length;
-    var recentCodingCount = state.codingProjects.filter(function (p) {
-      return p.lastWorkedOn && daysBetween(p.lastWorkedOn, today) <= ATTENTION_DAYS_THRESHOLD;
-    }).length;
-
     var cards = [
       {
         tab: "guitar",
@@ -1149,13 +1169,6 @@
         value: listeningValue,
         sub: listeningSub,
       },
-      {
-        tab: "codingProjects",
-        color: "coding-projects",
-        label: "💻 Coding Projects",
-        value: activeCodingCount + " Active",
-        sub: plannedCodingCount + " Planned · " + parkedCodingCount + " Parked · " + recentCodingCount + " worked on recently",
-      },
     ];
 
     el.innerHTML = cards
@@ -1179,7 +1192,7 @@
     renderTodayTrainingCard();
     renderStudyFocusCard();
     renderAttentionCard();
-    renderNextCodingActionCard();
+    renderCodingProjectsFocusCard();
   }
 
   // ===================== GUITAR =====================
