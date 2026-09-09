@@ -1007,15 +1007,17 @@
       section.insertBefore(card, dataCard);
     }
 
+    // Primary content: the active task (In Progress / Reviewing), if any.
     var focus = computeCurrentStudyFocus();
-    var bodyHtml;
+    var primaryHtml;
     if (!focus) {
-      bodyHtml = '<p class="card-subtext">No active study task</p>';
+      primaryHtml = '<p class="card-subtext">No active study task</p>';
     } else {
       var t = focus.primary;
       var subjectName = studySubjectName(t.subjectId);
       var title = subjectName ? subjectName + " — " + t.title : t.title;
-      bodyHtml =
+      primaryHtml =
+        '<div class="study-focus-label">Currently working on:</div>' +
         '<button type="button" class="session-row" data-study-focus-task-id="' + t.id + '" aria-label="Open ' + escapeHtml(title) + ' in Study">' +
         '<div class="session-row-main">' +
         '<div class="session-row-title">' + escapeHtml(title) + "</div>" +
@@ -1025,7 +1027,15 @@
         (focus.extraCount > 0 ? '<p class="hint-text">+' + focus.extraCount + " more active</p>" : "");
     }
 
-    card.innerHTML = '<h3 class="card-title">Currently Working On</h3>' + bodyHtml;
+    // Secondary content: task count + overall completion, purely a
+    // read-only derived summary of existing state — never written back.
+    var taskCount = state.studyTasks.length;
+    var secondaryHtml =
+      '<p class="card-subtext dashboard-secondary-line">' +
+      taskCount + " task" + (taskCount === 1 ? "" : "s") +
+      " · " + avgFieldPercent(state.studyTasks, "completion") + " overall</p>";
+
+    card.innerHTML = '<h3 class="card-title">Study</h3>' + primaryHtml + secondaryHtml;
 
     var focusBtn = card.querySelector("[data-study-focus-task-id]");
     if (focusBtn) {
@@ -1131,15 +1141,6 @@
         label: "Next Confirmed Race",
         value: nextConfirmed ? nextConfirmed.name : "None",
         sub: nextConfirmedSub,
-      },
-      {
-        tab: "study",
-        color: "study",
-        label: "Study Tasks",
-        value: String(state.studyTasks.length),
-        sub:
-          "Avg completion " + avgFieldPercent(state.studyTasks, "completion") +
-          " · " + state.studySubjects.length + " subject" + (state.studySubjects.length === 1 ? "" : "s"),
       },
       {
         tab: "listening",
