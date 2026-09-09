@@ -944,66 +944,6 @@
     return { primary: sorted[0], extraCount: sorted.length - 1 };
   }
 
-  // Shows the one Coding Project currently being worked on (see
-  // computeCurrentCodingFocus() above) as the card's primary content, with
-  // its next action underneath and project counts demoted to a secondary
-  // summary line. Reuses the existing navigateToItem() drill-down (which
-  // already knows how to clear the status filter and highlight by stable
-  // project id) — no separate navigation system.
-  function renderCodingProjectsFocusCard() {
-    var section = document.querySelector('.tab-section[data-section="dashboard"]');
-    if (!section) return;
-    var card = document.getElementById("dashboard-coding-focus");
-    if (!card) {
-      card = document.createElement("div");
-      card.id = "dashboard-coding-focus";
-      card.className = "card";
-      var dataCard = section.querySelector(".data-card");
-      section.insertBefore(card, dataCard);
-    }
-
-    var focus = computeCurrentCodingFocus();
-    var primaryHtml;
-    if (!focus) {
-      primaryHtml = '<p class="card-subtext">No active coding project</p>';
-    } else {
-      var p = focus.primary;
-      primaryHtml =
-        '<div class="dashboard-focus-label">Currently working on:</div>' +
-        '<button type="button" class="session-row" data-coding-focus-project-id="' + p.id + '" aria-label="Open ' + escapeHtml(p.name) + ' in Coding Projects">' +
-        '<div class="session-row-main">' +
-        '<div class="session-row-title">' + escapeHtml(p.name) + "</div>" +
-        '<div class="session-row-meta">' + escapeHtml(p.status) + " · " + (Number(p.progress) || 0) + "%</div>" +
-        "</div>" +
-        "</button>" +
-        (focus.extraCount > 0 ? '<p class="hint-text">+' + focus.extraCount + " more active</p>" : "") +
-        (p.nextAction
-          ? '<div class="dashboard-focus-label">Next action:</div><p class="card-subtext">' + escapeHtml(p.nextAction) + "</p>"
-          : "");
-    }
-
-    var totalCount = state.codingProjects.length;
-    var activeCount = state.codingProjects.filter(function (proj) {
-      return proj.status === "Building" || proj.status === "Testing";
-    }).length;
-    var plannedCount = state.codingProjects.filter(function (proj) {
-      return proj.status === "Idea" || proj.status === "Planning";
-    }).length;
-    var secondaryHtml =
-      '<p class="card-subtext dashboard-secondary-line">' +
-      totalCount + " project" + (totalCount === 1 ? "" : "s") +
-      " · " + activeCount + " active · " + plannedCount + " planned</p>";
-
-    card.innerHTML = '<h3 class="card-title">Coding Projects</h3>' + primaryHtml + secondaryHtml;
-
-    var focusBtn = card.querySelector("[data-coding-focus-project-id]");
-    if (focusBtn) {
-      focusBtn.addEventListener("click", function () {
-        navigateToItem({ module: "codingProjects", itemId: focusBtn.getAttribute("data-coding-focus-project-id") });
-      });
-    }
-  }
-
   // Picks the single Study task the user is most likely mid-way through
   // right now: In Progress or Reviewing, preferring whichever was worked
   // on most recently, falling back to High priority on a tie (or when
@@ -1024,58 +964,94 @@
     return { primary: sorted[0], extraCount: sorted.length - 1 };
   }
 
-  // Shows the one Study task currently being worked on (see
-  // computeCurrentStudyFocus() above) as its own clickable row. Reuses the
-  // same navigateToItem() drill-down as Items Needing Attention and Next
-  // Project Action — no separate navigation system.
-  function renderStudyFocusCard() {
-    var section = document.querySelector('.tab-section[data-section="dashboard"]');
-    if (!section) return;
-    var card = document.getElementById("dashboard-study-focus");
-    if (!card) {
-      card = document.createElement("div");
-      card.id = "dashboard-study-focus";
-      card.className = "card";
-      var dataCard = section.querySelector(".data-card");
-      section.insertBefore(card, dataCard);
-    }
+  // Builds a plain (label/value/sub) grid tile — the shape shared by
+  // Guitar, Training, Race Pipeline, Next Confirmed Race, and Listening.
+  function simpleStatCardHtml(c) {
+    return (
+      '<button type="button" class="stat-card" data-goto="' + c.tab + '" data-color="' + c.color + '">' +
+      '<div class="stat-card-label">' + escapeHtml(c.label) + "</div>" +
+      '<div class="stat-card-value">' + escapeHtml(c.value) + "</div>" +
+      '<div class="stat-card-sub">' + escapeHtml(c.sub) + "</div>" +
+      "</button>"
+    );
+  }
 
-    // Primary content: the active task (In Progress / Reviewing), if any.
+  // Builds the Study grid tile: the active task (see
+  // computeCurrentStudyFocus()) as primary content, task count/overall
+  // completion demoted to a secondary line. The whole tile is one button —
+  // clicking it deep-links to the active task via navigateToItem() when
+  // there is one, or just opens the Study tab when there isn't.
+  function studyStatCardHtml() {
     var focus = computeCurrentStudyFocus();
-    var primaryHtml;
-    if (!focus) {
-      primaryHtml = '<p class="card-subtext">No active study task</p>';
-    } else {
+    var taskCount = state.studyTasks.length;
+    var focusHtml;
+    var ariaLabel;
+    var taskIdAttr = "";
+
+    if (focus) {
       var t = focus.primary;
       var subjectName = studySubjectName(t.subjectId);
-      var title = subjectName ? subjectName + " — " + t.title : t.title;
-      primaryHtml =
-        '<div class="dashboard-focus-label">Currently working on:</div>' +
-        '<button type="button" class="session-row" data-study-focus-task-id="' + t.id + '" aria-label="Open ' + escapeHtml(title) + ' in Study">' +
-        '<div class="session-row-main">' +
-        '<div class="session-row-title">' + escapeHtml(title) + "</div>" +
-        '<div class="session-row-meta">' + escapeHtml(t.status) + " · " + (Number(t.completion) || 0) + "%</div>" +
-        "</div>" +
-        "</button>" +
-        (focus.extraCount > 0 ? '<p class="hint-text">+' + focus.extraCount + " more active</p>" : "");
+      var titleText = subjectName ? subjectName + " — " + t.title : t.title;
+      focusHtml =
+        (subjectName ? '<div class="stat-card-focus-subject">' + escapeHtml(subjectName) + "</div>" : "") +
+        '<div class="stat-card-focus-title">' + escapeHtml(t.title) + "</div>" +
+        '<div class="stat-card-focus-meta">' + escapeHtml(t.status) + " · " + (Number(t.completion) || 0) + "%</div>" +
+        (focus.extraCount > 0 ? '<div class="stat-card-focus-more">+' + focus.extraCount + " more active</div>" : "");
+      ariaLabel = "Open " + titleText + " in Study";
+      taskIdAttr = ' data-study-focus-task-id="' + t.id + '"';
+    } else {
+      focusHtml = '<div class="stat-card-focus-empty">No active study task</div>';
+      ariaLabel = "Open Study";
     }
 
-    // Secondary content: task count + overall completion, purely a
-    // read-only derived summary of existing state — never written back.
-    var taskCount = state.studyTasks.length;
-    var secondaryHtml =
-      '<p class="card-subtext dashboard-secondary-line">' +
-      taskCount + " task" + (taskCount === 1 ? "" : "s") +
-      " · " + avgFieldPercent(state.studyTasks, "completion") + " overall</p>";
+    return (
+      '<button type="button" class="stat-card" data-color="study" data-study-summary-card' + taskIdAttr + ' aria-label="' + escapeHtml(ariaLabel) + '">' +
+      '<div class="stat-card-label">Study</div>' +
+      focusHtml +
+      '<div class="stat-card-sub">' + taskCount + " task" + (taskCount === 1 ? "" : "s") + " · " + avgFieldPercent(state.studyTasks, "completion") + " overall</div>" +
+      "</button>"
+    );
+  }
 
-    card.innerHTML = '<h3 class="card-title">Study</h3>' + primaryHtml + secondaryHtml;
+  // Builds the Coding Projects grid tile: the active project (see
+  // computeCurrentCodingFocus()) as primary content with its next action
+  // underneath, project counts demoted to a secondary line. Same
+  // whole-tile-is-one-button click behavior as the Study tile.
+  function codingProjectsStatCardHtml() {
+    var focus = computeCurrentCodingFocus();
+    var totalCount = state.codingProjects.length;
+    var activeCount = state.codingProjects.filter(function (p) {
+      return p.status === "Building" || p.status === "Testing";
+    }).length;
+    var plannedCount = state.codingProjects.filter(function (p) {
+      return p.status === "Idea" || p.status === "Planning";
+    }).length;
 
-    var focusBtn = card.querySelector("[data-study-focus-task-id]");
-    if (focusBtn) {
-      focusBtn.addEventListener("click", function () {
-        navigateToItem({ module: "study", itemId: focusBtn.getAttribute("data-study-focus-task-id") });
-      });
+    var focusHtml;
+    var ariaLabel;
+    var projectIdAttr = "";
+
+    if (focus) {
+      var p = focus.primary;
+      focusHtml =
+        '<div class="stat-card-focus-title">' + escapeHtml(p.name) + "</div>" +
+        '<div class="stat-card-focus-meta">' + escapeHtml(p.status) + " · " + (Number(p.progress) || 0) + "%</div>" +
+        (focus.extraCount > 0 ? '<div class="stat-card-focus-more">+' + focus.extraCount + " more active</div>" : "") +
+        (p.nextAction ? '<div class="stat-card-focus-next-action">Next: ' + escapeHtml(p.nextAction) + "</div>" : "");
+      ariaLabel = "Open " + p.name + " in Coding Projects";
+      projectIdAttr = ' data-coding-focus-project-id="' + p.id + '"';
+    } else {
+      focusHtml = '<div class="stat-card-focus-empty">No active coding project</div>';
+      ariaLabel = "Open Coding Projects";
     }
+
+    return (
+      '<button type="button" class="stat-card" data-color="coding-projects" data-coding-summary-card' + projectIdAttr + ' aria-label="' + escapeHtml(ariaLabel) + '">' +
+      '<div class="stat-card-label">Coding Projects</div>' +
+      focusHtml +
+      '<div class="stat-card-sub">' + totalCount + " project" + (totalCount === 1 ? "" : "s") + " · " + activeCount + " active · " + plannedCount + " planned</div>" +
+      "</button>"
+    );
   }
 
   function renderDashboard() {
@@ -1171,17 +1147,17 @@
       },
     ];
 
-    el.innerHTML = cards
-      .map(function (c) {
-        return (
-          '<button type="button" class="stat-card" data-goto="' + c.tab + '" data-color="' + c.color + '">' +
-          '<div class="stat-card-label">' + escapeHtml(c.label) + "</div>" +
-          '<div class="stat-card-value">' + escapeHtml(c.value) + "</div>" +
-          '<div class="stat-card-sub">' + escapeHtml(c.sub) + "</div>" +
-          "</button>"
-        );
-      })
-      .join("");
+    // Study and Coding Projects render as richer tiles (active-item focus)
+    // rather than the plain label/value/sub shape, but stay in the same
+    // grid alongside everything else — same position they held before.
+    el.innerHTML =
+      simpleStatCardHtml(cards[0]) + // Guitar
+      simpleStatCardHtml(cards[1]) + // Training This Week
+      simpleStatCardHtml(cards[2]) + // Race Pipeline
+      simpleStatCardHtml(cards[3]) + // Next Confirmed Race
+      studyStatCardHtml() +
+      simpleStatCardHtml(cards[4]) + // Listening
+      codingProjectsStatCardHtml();
 
     el.querySelectorAll("[data-goto]").forEach(function (btn) {
       btn.addEventListener("click", function () {
@@ -1189,10 +1165,32 @@
       });
     });
 
+    var studyCardBtn = el.querySelector("[data-study-summary-card]");
+    if (studyCardBtn) {
+      studyCardBtn.addEventListener("click", function () {
+        var taskId = studyCardBtn.getAttribute("data-study-focus-task-id");
+        if (taskId) {
+          navigateToItem({ module: "study", itemId: taskId });
+        } else {
+          setActiveTab("study");
+        }
+      });
+    }
+
+    var codingCardBtn = el.querySelector("[data-coding-summary-card]");
+    if (codingCardBtn) {
+      codingCardBtn.addEventListener("click", function () {
+        var projectId = codingCardBtn.getAttribute("data-coding-focus-project-id");
+        if (projectId) {
+          navigateToItem({ module: "codingProjects", itemId: projectId });
+        } else {
+          setActiveTab("codingProjects");
+        }
+      });
+    }
+
     renderTodayTrainingCard();
-    renderStudyFocusCard();
     renderAttentionCard();
-    renderCodingProjectsFocusCard();
   }
 
   // ===================== GUITAR =====================
