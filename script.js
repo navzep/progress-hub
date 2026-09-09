@@ -28,7 +28,7 @@
   var realtimeChannel = null;
 
   var RACE_STATUSES = ["Confirmed", "Tentative", "Bucket List", "Completed"];
-  var TASK_STATUSES = ["Not Started", "In Progress", "Completed"];
+  var TASK_STATUSES = ["Not Started", "In Progress", "Reviewing", "Completed"];
   var TASK_PRIORITIES = ["Low", "Medium", "High"];
   var GUITAR_STATUSES = ["Learning", "In Progress", "Rhythm solid", "Nearly There", "Maintenance"];
   var DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -277,12 +277,12 @@
     normalized.studySubjects.push(subject);
 
     // Old topic "status" was a mastery scale; new task "status" is a
-    // lifecycle stage. Reviewing (still working it) folds into In Progress;
-    // Mastered (done) folds into Completed.
+    // lifecycle stage, but now includes Reviewing directly, so it maps
+    // straight across. Mastered (done) still folds into Completed.
     var statusMap = {
       "Not Started": "Not Started",
       "In Progress": "In Progress",
-      "Reviewing": "In Progress",
+      "Reviewing": "Reviewing",
       "Mastered": "Completed",
     };
 
@@ -500,6 +500,15 @@
     showToast._t = setTimeout(function () {
       toast.hidden = true;
     }, 2600);
+  }
+
+  function avgFieldPercent(list, field) {
+    field = field || "confidence";
+    if (!list.length) return "—";
+    var sum = list.reduce(function (acc, i) {
+      return acc + (Number(i[field]) || 0);
+    }, 0);
+    return Math.round(sum / list.length) + "%";
   }
 
   function confidenceLevelClass(value) {
@@ -962,6 +971,70 @@
     }
   }
 
+  // Picks the single Study task the user is most likely mid-way through
+  // right now: In Progress or Reviewing, preferring whichever was worked
+  // on most recently, falling back to High priority on a tie (or when
+  // neither candidate has a lastWorkedOn date at all).
+  function computeCurrentStudyFocus() {
+    var active = state.studyTasks.filter(function (t) {
+      return t.status === "In Progress" || t.status === "Reviewing";
+    });
+    if (!active.length) return null;
+
+    var priorityRank = { High: 3, Medium: 2, Low: 1 };
+    var sorted = active.slice().sort(function (a, b) {
+      var aDate = a.lastWorkedOn || "";
+      var bDate = b.lastWorkedOn || "";
+      if (aDate !== bDate) return aDate < bDate ? 1 : -1;
+      return (priorityRank[b.priority] || 0) - (priorityRank[a.priority] || 0);
+    });
+    return { primary: sorted[0], extraCount: sorted.length - 1 };
+  }
+
+  // Shows the one Study task currently being worked on (see
+  // computeCurrentStudyFocus() above) as its own clickable row. Reuses the
+  // same navigateToItem() drill-down as Items Needing Attention and Next
+  // Project Action — no separate navigation system.
+  function renderStudyFocusCard() {
+    var section = document.querySelector('.tab-section[data-section="dashboard"]');
+    if (!section) return;
+    var card = document.getElementById("dashboard-study-focus");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "dashboard-study-focus";
+      card.className = "card";
+      var dataCard = section.querySelector(".data-card");
+      section.insertBefore(card, dataCard);
+    }
+
+    var focus = computeCurrentStudyFocus();
+    var bodyHtml;
+    if (!focus) {
+      bodyHtml = '<p class="card-subtext">No active study task</p>';
+    } else {
+      var t = focus.primary;
+      var subjectName = studySubjectName(t.subjectId);
+      var title = subjectName ? subjectName + " — " + t.title : t.title;
+      bodyHtml =
+        '<button type="button" class="session-row" data-study-focus-task-id="' + t.id + '" aria-label="Open ' + escapeHtml(title) + ' in Study">' +
+        '<div class="session-row-main">' +
+        '<div class="session-row-title">' + escapeHtml(title) + "</div>" +
+        '<div class="session-row-meta">' + escapeHtml(t.status) + " · " + (Number(t.completion) || 0) + "%</div>" +
+        "</div>" +
+        "</button>" +
+        (focus.extraCount > 0 ? '<p class="hint-text">+' + focus.extraCount + " more active</p>" : "");
+    }
+
+    card.innerHTML = '<h3 class="card-title">Currently Working On</h3>' + bodyHtml;
+
+    var focusBtn = card.querySelector("[data-study-focus-task-id]");
+    if (focusBtn) {
+      focusBtn.addEventListener("click", function () {
+        navigateToItem({ module: "study", itemId: focusBtn.getAttribute("data-study-focus-task-id") });
+      });
+    }
+  }
+
   function renderDashboard() {
     var el = document.getElementById("dashboard-content");
     var today = todayISO();
@@ -979,15 +1052,6 @@
       return s.completed;
     }).length;
     var weekPct = weekSessions.length ? Math.round((weekCompleted / weekSessions.length) * 100) : 0;
-
-    var avgConfidence = function (list, field) {
-      field = field || "confidence";
-      if (!list.length) return "—";
-      var sum = list.reduce(function (acc, i) {
-        return acc + (Number(i[field]) || 0);
-      }, 0);
-      return Math.round(sum / list.length) + "%";
-    };
 
     var raceCounts = { Confirmed: 0, Tentative: 0, "Bucket List": 0, Completed: 0 };
     state.races.forEach(function (r) {
@@ -1045,12 +1109,12 @@
         color: "guitar",
         label: "Guitar Items",
         value: String(state.guitarItems.length),
-        sub: "Avg confidence " + avgConfidence(state.guitarItems),
+        sub: "Avg confidence " + avgFieldPercent(state.guitarItems),
       },
       {
         tab: "training",
         color: "training",
-        label: "This Week",
+        label: "Training This Week",
         value: weekCompleted + " / " + weekSessions.length + " (" + weekPct + "%)",
         sub: "sessions completed",
       },
@@ -1074,7 +1138,7 @@
         label: "Study Tasks",
         value: String(state.studyTasks.length),
         sub:
-          "Avg completion " + avgConfidence(state.studyTasks, "completion") +
+          "Avg completion " + avgFieldPercent(state.studyTasks, "completion") +
           " · " + state.studySubjects.length + " subject" + (state.studySubjects.length === 1 ? "" : "s"),
       },
       {
@@ -1112,6 +1176,7 @@
     });
 
     renderTodayTrainingCard();
+    renderStudyFocusCard();
     renderAttentionCard();
     renderNextCodingActionCard();
   }

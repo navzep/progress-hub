@@ -355,6 +355,7 @@ body[data-theme="dark"] .tab-button:not(.active) {
 .badge-revisit { background: rgba(124, 147, 255, 0.18); color: var(--accent); }
 .badge-not-started { background: var(--bg-subtle); color: var(--text-muted); }
 .badge-in-progress { background: rgba(217, 119, 6, 0.18); color: #d97706; }
+.badge-reviewing { background: rgba(124, 147, 255, 0.18); color: var(--accent); }
 .badge-priority-low { background: var(--bg-subtle); color: var(--text-muted); }
 .badge-priority-medium { background: rgba(230, 160, 40, 0.18); color: #c58a1f; }
 .badge-priority-high { background: rgba(214, 69, 69, 0.15); color: var(--danger); }
