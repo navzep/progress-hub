@@ -2894,7 +2894,7 @@
                       (t.isNextAction
                         ? '<span class="hint-text">★ Next Action</span>'
                         : '<button class="button button-secondary button-small" data-set-next-action="' + t.id + '" type="button">Set as Next Action</button>') +
-                      '<button class="button button-primary button-small" data-coding-task-worked-today="' + t.id + '" type="button">Worked On Today</button>' +
+                      '<button class="button button-secondary button-small" data-coding-task-worked-today="' + t.id + '" type="button">Worked On Today</button>' +
                       '<button class="button button-secondary button-small" data-edit-coding-task="' + t.id + '" type="button">Edit</button>' +
                       '<button class="button button-danger button-small" data-delete-coding-task="' + t.id + '" type="button">Delete</button>' +
                       "</div>" +
@@ -2926,7 +2926,8 @@
           '<button class="coding-tasks-toggle" data-toggle-coding-tasks="' + p.id + '" type="button" aria-expanded="' + (expanded ? "true" : "false") + '">' + toggleLabel + "</button>" +
           '<div class="coding-project-actions">' +
           '<button class="button button-primary button-small" data-add-coding-task-to="' + p.id + '" type="button">+ Task</button>' +
-          '<button class="button button-primary button-small" data-worked-today="' + p.id + '" type="button">Worked On Today</button>' +
+          '<button class="button button-secondary button-small" data-import-coding-tasks-to="' + p.id + '" type="button">Import Tasks</button>' +
+          '<button class="button button-secondary button-small" data-worked-today="' + p.id + '" type="button">Worked On Today</button>' +
           '<button class="button button-secondary button-small" data-edit-coding-project="' + p.id + '" type="button">Edit</button>' +
           '<button class="button button-danger button-small" data-delete-coding-project="' + p.id + '" type="button">Delete</button>' +
           "</div>" +
@@ -2987,6 +2988,11 @@
     el.querySelectorAll("[data-add-coding-task-to]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         openCodingTaskModal(null, btn.getAttribute("data-add-coding-task-to"));
+      });
+    });
+    el.querySelectorAll("[data-import-coding-tasks-to]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        openImportCodingTasksModal(btn.getAttribute("data-import-coding-tasks-to"));
       });
     });
     el.querySelectorAll("[data-edit-coding-task]").forEach(function (btn) {
@@ -3268,6 +3274,141 @@
       renderAll();
       closeModal();
       showToast(task ? "Task updated" : "Task added");
+    });
+  }
+
+  function codingTaskDupKey(title) {
+    return (title || "").trim().toLowerCase();
+  }
+
+  // Parses pasted task lines for the bulk task importer (scoped to one
+  // existing project - see openImportCodingTasksModal()). Mirrors
+  // parseCodingProjectsPasteText()'s simple/rich-format and
+  // invalid-value-defaults conventions, but for the task fields.
+  function parseCodingTasksPasteText(text) {
+    var lines = text
+      .split("\n")
+      .map(function (l) {
+        return l.trim();
+      })
+      .filter(Boolean);
+    var rows = [];
+    var invalidStatusCount = 0;
+    var invalidPriorityCount = 0;
+    var invalidDueDateCount = 0;
+    var dueDatePattern = /^\d{4}-\d{2}-\d{2}$/;
+
+    lines.forEach(function (line) {
+      var parts = line.split("|").map(function (p) {
+        return p.trim();
+      });
+      var title = parts[0];
+      if (!title) return;
+
+      var status = "To Do";
+      var statusRaw = parts[1] || "";
+      if (statusRaw) {
+        if (CODING_TASK_STATUSES.indexOf(statusRaw) !== -1) {
+          status = statusRaw;
+        } else {
+          invalidStatusCount++;
+        }
+      }
+
+      var priority = "Medium";
+      var priorityRaw = parts[2] || "";
+      if (priorityRaw) {
+        if (TASK_PRIORITIES.indexOf(priorityRaw) !== -1) {
+          priority = priorityRaw;
+        } else {
+          invalidPriorityCount++;
+        }
+      }
+
+      var dueDate = "";
+      var dueDateRaw = parts[3] || "";
+      if (dueDateRaw) {
+        if (dueDatePattern.test(dueDateRaw)) {
+          dueDate = dueDateRaw;
+        } else {
+          invalidDueDateCount++;
+        }
+      }
+
+      rows.push({ title: title, status: status, priority: priority, dueDate: dueDate });
+    });
+
+    return {
+      rows: rows,
+      invalidStatusCount: invalidStatusCount,
+      invalidPriorityCount: invalidPriorityCount,
+      invalidDueDateCount: invalidDueDateCount,
+    };
+  }
+
+  // Bulk-imports tasks into one specific, already-existing project - never
+  // creates a project. Duplicate titles (trimmed, case-insensitive) are
+  // only checked against tasks already in that project, so the same title
+  // is allowed to exist in a different project.
+  function openImportCodingTasksModal(projectId) {
+    var project = findCodingProject(projectId);
+    if (!project) return;
+
+    var fieldsHtml =
+      '<div class="form-group">' +
+      '<label for="cti-paste">Paste tasks - one per line, or Title | Status | Priority | Due Date</label>' +
+      '<textarea id="cti-paste" name="pasteText" rows="8" placeholder="Add global search\nRun final regression | Testing | High | 2026-09-20"></textarea>' +
+      "</div>";
+
+    openModal("Import Tasks — " + project.name, fieldsHtml, function (formData) {
+      var result = parseCodingTasksPasteText(formData.get("pasteText") || "");
+      if (!result.rows.length) {
+        showToast("No tasks found. Check the format.");
+        return;
+      }
+
+      var existingKeys = {};
+      codingProjectTasks(project.id).forEach(function (t) {
+        existingKeys[codingTaskDupKey(t.title)] = true;
+      });
+
+      var now = new Date().toISOString();
+      var added = 0;
+      var duplicates = 0;
+      result.rows.forEach(function (row) {
+        var key = codingTaskDupKey(row.title);
+        if (existingKeys[key]) {
+          duplicates++;
+          return;
+        }
+        existingKeys[key] = true;
+        state.codingTasks.push({
+          id: generateId(),
+          projectId: project.id,
+          title: row.title,
+          status: row.status,
+          priority: row.priority,
+          dueDate: row.dueDate,
+          notes: "",
+          isNextAction: false,
+          lastWorkedOn: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+        added++;
+      });
+
+      expandedCodingProjectIds[project.id] = true;
+      saveState();
+      renderAll();
+      closeModal();
+
+      var msg = result.rows.length + " task(s) detected — " + added + " imported";
+      if (duplicates > 0) msg += ", " + duplicates + " duplicate(s) skipped";
+      if (result.invalidStatusCount > 0) msg += ", " + result.invalidStatusCount + " unrecognized status defaulted";
+      if (result.invalidPriorityCount > 0) msg += ", " + result.invalidPriorityCount + " unrecognized priority defaulted";
+      if (result.invalidDueDateCount > 0) msg += ", " + result.invalidDueDateCount + " invalid due date cleared";
+      showToast(msg);
     });
   }
 
