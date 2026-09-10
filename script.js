@@ -2842,11 +2842,31 @@
         var nextActionTask = computeProjectNextActionTask(p.id);
         var expanded = !!expandedCodingProjectIds[p.id];
 
-        var taskSummaryHtml = stats.total
-          ? '<div class="item-card-meta">' + stats.completed + " / " + stats.total + " tasks complete</div>"
-          : '<div class="item-card-meta">No tasks yet</div>';
-        var activeTaskHtml = activeTask ? '<div class="item-card-meta">▶ Working on: ' + escapeHtml(activeTask.title) + "</div>" : "";
-        var nextActionHtml = nextActionTask ? '<div class="item-card-meta">➡ Next: ' + escapeHtml(nextActionTask.title) + "</div>" : "";
+        var progressGroupHtml =
+          '<div class="coding-project-progress-group">' +
+          confidenceBarHtml(displayProgress, "Progress") +
+          '<div class="item-card-meta">' + (stats.total ? stats.completed + " / " + stats.total + " tasks complete" : "No tasks yet") + "</div>" +
+          "</div>";
+
+        // If the same task is both the active task and the Next Action, show
+        // it once ("Working on" takes precedence - it reflects what's
+        // actually happening right now) rather than repeating its title.
+        var showNextLine = nextActionTask && (!activeTask || activeTask.id !== nextActionTask.id);
+        var focusGroupHtml = "";
+        if (activeTask || showNextLine) {
+          focusGroupHtml =
+            '<div class="coding-project-focus-group">' +
+            (activeTask ? '<div class="item-card-meta">▶ Working on: ' + escapeHtml(activeTask.title) + "</div>" : "") +
+            (showNextLine ? '<div class="item-card-meta">➡ Next: ' + escapeHtml(nextActionTask.title) + "</div>" : "") +
+            "</div>";
+        }
+
+        var detailsGroupHtml =
+          '<div class="coding-project-details-group">' +
+          (p.milestone ? '<div class="item-card-meta">🎯 ' + escapeHtml(p.milestone) + "</div>" : "") +
+          '<div class="item-card-meta">Last worked on: ' + (p.lastWorkedOn ? formatDateNice(p.lastWorkedOn) : "Never") + "</div>" +
+          (p.techStack ? '<div class="item-card-meta">🛠 ' + escapeHtml(p.techStack) + "</div>" : "") +
+          "</div>";
 
         var tasksBlockHtml = "";
         if (expanded) {
@@ -2861,14 +2881,15 @@
                       '<div class="coding-task-row' + (t.status === "Done" ? " completed" : "") + '" data-id="' + t.id + '" data-coding-task-id="' + t.id + '">' +
                       '<div class="coding-task-main">' +
                       '<div class="coding-task-title">' + escapeHtml(t.title) + (t.isNextAction ? ' <span class="badge badge-next-action">Next Action</span>' : "") + "</div>" +
+                      '<div class="coding-task-badges">' +
+                      '<span class="badge ' + taskStatusBadgeClass(t.status) + '">' + escapeHtml(t.status) + "</span>" +
+                      '<span class="badge ' + taskPriorityBadgeClass(t.priority) + '">' + escapeHtml(t.priority) + "</span>" +
+                      "</div>" +
                       '<div class="coding-task-meta' + (overdue ? " overdue" : "") + '">' +
                       (t.dueDate ? "Due " + formatDateNice(t.dueDate) + " · " : "") +
                       "Last worked on: " + (t.lastWorkedOn ? formatDateNice(t.lastWorkedOn) : "Never") +
                       "</div>" +
                       (t.notes ? '<div class="item-card-notes">' + escapeHtml(t.notes) + "</div>" : "") +
-                      "</div>" +
-                      '<span class="badge ' + taskStatusBadgeClass(t.status) + '">' + escapeHtml(t.status) + "</span>" +
-                      '<span class="badge ' + taskPriorityBadgeClass(t.priority) + '">' + escapeHtml(t.priority) + "</span>" +
                       '<div class="coding-task-actions">' +
                       (t.isNextAction
                         ? '<span class="hint-text">★ Next Action</span>'
@@ -2876,6 +2897,7 @@
                       '<button class="button button-primary button-small" data-coding-task-worked-today="' + t.id + '" type="button">Worked On Today</button>' +
                       '<button class="button button-secondary button-small" data-edit-coding-task="' + t.id + '" type="button">Edit</button>' +
                       '<button class="button button-danger button-small" data-delete-coding-task="' + t.id + '" type="button">Delete</button>' +
+                      "</div>" +
                       "</div>" +
                       "</div>"
                     );
@@ -2885,8 +2907,10 @@
             "</div>";
         }
 
+        var toggleLabel = "Tasks (" + stats.total + ") " + (expanded ? "▴" : "▾");
+
         return (
-          '<div class="item-card" data-id="' + p.id + '" data-coding-project-id="' + p.id + '">' +
+          '<div class="item-card coding-project-card" data-id="' + p.id + '" data-coding-project-id="' + p.id + '">' +
           '<div class="item-card-header">' +
           '<div>' +
           '<div class="item-card-title">' + escapeHtml(p.name) + "</div>" +
@@ -2894,18 +2918,14 @@
           "</div>" +
           '<span class="badge ' + taskStatusBadgeClass(p.status) + '">' + escapeHtml(p.status) + "</span>" +
           "</div>" +
-          confidenceBarHtml(displayProgress, "Progress") +
-          taskSummaryHtml +
-          activeTaskHtml +
-          nextActionHtml +
-          (p.milestone ? '<div class="item-card-meta">🎯 ' + escapeHtml(p.milestone) + "</div>" : "") +
-          '<div class="item-card-meta">Last worked on: ' + (p.lastWorkedOn ? formatDateNice(p.lastWorkedOn) : "Never") + "</div>" +
-          (p.techStack ? '<div class="item-card-meta">🛠 ' + escapeHtml(p.techStack) + "</div>" : "") +
+          progressGroupHtml +
+          focusGroupHtml +
+          detailsGroupHtml +
           (p.notes ? '<div class="item-card-notes">' + escapeHtml(p.notes) + "</div>" : "") +
           linksHtml +
-          '<div class="item-card-actions">' +
-          '<button class="button button-secondary button-small" data-toggle-coding-tasks="' + p.id + '" type="button">' + (expanded ? "Hide Tasks" : "Show Tasks (" + stats.total + ")") + "</button>" +
-          '<button class="button button-secondary button-small" data-add-coding-task-to="' + p.id + '" type="button">+ Task</button>' +
+          '<button class="coding-tasks-toggle" data-toggle-coding-tasks="' + p.id + '" type="button" aria-expanded="' + (expanded ? "true" : "false") + '">' + toggleLabel + "</button>" +
+          '<div class="coding-project-actions">' +
+          '<button class="button button-primary button-small" data-add-coding-task-to="' + p.id + '" type="button">+ Task</button>' +
           '<button class="button button-primary button-small" data-worked-today="' + p.id + '" type="button">Worked On Today</button>' +
           '<button class="button button-secondary button-small" data-edit-coding-project="' + p.id + '" type="button">Edit</button>' +
           '<button class="button button-danger button-small" data-delete-coding-project="' + p.id + '" type="button">Delete</button>' +

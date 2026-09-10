@@ -1007,3 +1007,95 @@ button.session-row:focus-visible {
     flex-direction: column;
   }
 }
+
+/* ===================== CODING PROJECT CARD POLISH ===================== */
+/* Scoped to Coding Projects only via #coding-projects-list / .coding-*
+   classes - does not touch the shared .card-grid / .item-card-actions
+   rules that Guitar, Races, and Listening also use. */
+
+/* Prevents CSS Grid's default row-stretch from forcing every collapsed
+   card in a row up to the height of the tallest (expanded) one. */
+#coding-projects-list.card-grid {
+  align-items: start;
+}
+
+/* A little more breathing room between top-level sections than the base
+   .item-card gap (8px), while each group below uses a tighter internal
+   gap so related lines read as one unit. */
+.coding-project-card {
+  gap: 14px;
+}
+
+.coding-project-progress-group,
+.coding-project-details-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* "Working on" / "Next" surfaced as one quiet, self-contained block
+   rather than two more undifferentiated item-card-meta lines. */
+.coding-project-focus-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg-subtle);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+/* Compact disclosure control ("Tasks (3) ▾") standing on its own line,
+   separate from the primary action buttons below it. */
+.coding-tasks-toggle {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.82rem;
+  padding: 10px 2px;
+  min-height: var(--tap-min);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.coding-tasks-toggle:hover {
+  text-decoration: underline;
+}
+
+.coding-tasks-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.coding-project-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+/* Nested/indented feel for the task list without it reading as another
+   full item-card at the same visual weight as its parent. */
+.coding-tasks-list {
+  margin-left: 4px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+}
+
+.coding-task-badges {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.coding-task-meta {
+  margin-top: 4px;
+}
+
+.coding-task-actions {
+  gap: 6px;
+  margin-top: 8px;
+}
