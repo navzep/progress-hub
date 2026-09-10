@@ -367,6 +367,11 @@ body[data-theme="dark"] .tab-button:not(.active) {
 .badge-paused { background: var(--bg-subtle); color: var(--text-muted); }
 .badge-parked { background: var(--bg-subtle); color: var(--text-muted); }
 
+.badge-to-do { background: var(--bg-subtle); color: var(--text-muted); }
+.badge-blocked { background: rgba(214, 69, 69, 0.15); color: var(--danger); }
+.badge-done { background: rgba(47, 158, 88, 0.15); color: var(--success); }
+.badge-next-action { background: rgba(217, 119, 6, 0.18); color: #d97706; font-size: 0.65rem; padding: 1px 6px; }
+
 .rating-stars {
   color: #d97706;
   font-size: 0.95rem;
@@ -882,14 +887,16 @@ button.session-row:focus-visible {
   margin-bottom: 4px;
 }
 
-.study-tasks-list {
+.study-tasks-list,
+.coding-tasks-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-top: 8px;
 }
 
-.study-task-row {
+.study-task-row,
+.coding-task-row {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -901,33 +908,40 @@ button.session-row:focus-visible {
   flex-wrap: wrap;
 }
 
-.study-task-row.completed {
+.study-task-row.completed,
+.coding-task-row.completed {
   opacity: 0.6;
 }
 
-.study-task-main {
+.study-task-main,
+.coding-task-main {
   flex: 1;
   min-width: 160px;
 }
 
-.study-task-title {
+.study-task-title,
+.coding-task-title {
   font-weight: 600;
   font-size: 0.9rem;
 }
 
-.study-task-meta {
+.study-task-meta,
+.coding-task-meta {
   font-size: 0.78rem;
   color: var(--text-muted);
 }
 
-.study-task-meta.overdue {
+.study-task-meta.overdue,
+.coding-task-meta.overdue {
   color: var(--danger);
   font-weight: 600;
 }
 
-.study-task-actions {
+.study-task-actions,
+.coding-task-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 /* ===================== MODAL ===================== */

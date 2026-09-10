@@ -47,10 +47,12 @@
   var LISTENING_STATUSES = ["To Listen", "Listening", "Finished", "Revisit"];
   var CODING_PROJECT_STATUSES = ["Idea", "Planning", "Building", "Testing", "Paused", "Completed", "Parked"];
   var CODING_PROJECT_TYPES = ["Web App", "Python", "Data Science", "Automation", "Work Tool", "Mobile / PWA", "Other"];
+  var CODING_TASK_STATUSES = ["To Do", "In Progress", "Blocked", "Testing", "Done"];
 
   var raceFilter = "All";
   var listeningFilter = "All";
   var codingProjectFilter = "All";
+  var expandedCodingProjectIds = {};
 
   var activeTimer = {
     itemId: null,
@@ -237,6 +239,30 @@
     ];
   }
 
+  // A project's legacy free-text `nextAction` becomes exactly one coding
+  // task, marked as that project's Next Action. Shared by the one-time
+  // state migration, the fresh-install seed path, and the bulk importer, so
+  // "legacy next action string -> task" has exactly one implementation.
+  function buildNextActionTask(project) {
+    var title = (project.nextAction || "").trim();
+    if (!title) return null;
+    var now = new Date().toISOString();
+    var priority = TASK_PRIORITIES.indexOf(project.priority) !== -1 ? project.priority : "Medium";
+    return {
+      id: generateId(),
+      projectId: project.id,
+      title: title,
+      status: "To Do",
+      priority: priority,
+      dueDate: "",
+      notes: "",
+      lastWorkedOn: null,
+      isNextAction: true,
+      createdAt: project.updatedAt || project.createdAt || now,
+      updatedAt: project.updatedAt || project.createdAt || now,
+    };
+  }
+
   // ===================== STATE =====================
 
   function defaultState() {
@@ -249,6 +275,7 @@
       studySubjects: [],
       studyTasks: [],
       codingProjects: [],
+      codingTasks: [],
     };
   }
 
@@ -312,6 +339,30 @@
     return true;
   }
 
+  // One-time migration: Coding Projects used to carry a single free-text
+  // `nextAction` field. It's now Project -> Tasks, with the legacy value
+  // folded into exactly one task per project (see buildNextActionTask()).
+  // Detects the old shape (no codingTasks array present at all) and runs at
+  // most once per state object: once codingTasks exists (even empty), this
+  // is a no-op regardless of what's left in any project's nextAction field.
+  // project.nextAction itself is deliberately never cleared — unlike
+  // studyTopics (a whole array, safe to empty), it's one field on a still-
+  // live record, and leaving it in place is strictly safer/non-destructive.
+  function migrateCodingProjectTasks(parsed, normalized) {
+    var hasNewShape = parsed && Array.isArray(parsed.codingTasks);
+    if (hasNewShape) {
+      normalized.codingTasks = parsed.codingTasks;
+      return false;
+    }
+
+    normalized.codingTasks = normalized.codingProjects
+      .map(function (p) {
+        return buildNextActionTask(p);
+      })
+      .filter(Boolean);
+    return normalized.codingTasks.length > 0;
+  }
+
   function normalizeState(parsed) {
     parsed = parsed || {};
     var normalized = {
@@ -323,6 +374,7 @@
       codingProjects: Array.isArray(parsed.codingProjects) ? parsed.codingProjects : [],
     };
     migrateStudyShape(parsed, normalized);
+    migrateCodingProjectTasks(parsed, normalized);
     return normalized;
   }
 
@@ -334,7 +386,7 @@
     if (!coreOk) return false;
     // These are optional for backward compatibility with exports made
     // before each module existed — but if present, must be arrays.
-    var optionalArrayKeys = ["listening", "studySubjects", "studyTasks", "codingProjects"];
+    var optionalArrayKeys = ["listening", "studySubjects", "studyTasks", "codingProjects", "codingTasks"];
     for (var i = 0; i < optionalArrayKeys.length; i++) {
       var key = optionalArrayKeys[i];
       if (Object.prototype.hasOwnProperty.call(parsed, key) && !Array.isArray(parsed[key])) {
@@ -352,6 +404,7 @@
       seeded.races = seedRaces();
       seeded.listening = seedListening();
       seeded.codingProjects = seedCodingProjects();
+      seeded.codingTasks = seeded.codingProjects.map(buildNextActionTask).filter(Boolean);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded));
       return seeded;
     }
@@ -360,8 +413,9 @@
       var hadListening = parsed && Array.isArray(parsed.listening);
       var hadStudyGrouping = parsed && (Array.isArray(parsed.studySubjects) || Array.isArray(parsed.studyTasks));
       var hadCodingProjects = parsed && Array.isArray(parsed.codingProjects);
+      var hadCodingTasks = parsed && Array.isArray(parsed.codingTasks);
       var normalized = normalizeState(parsed);
-      if (!hadListening || !hadStudyGrouping || !hadCodingProjects) {
+      if (!hadListening || !hadStudyGrouping || !hadCodingProjects || !hadCodingTasks) {
         // One-time migrations: an existing saved user predating the
         // Listening module (add the starter library), predating the Study
         // Subjects/Tasks grouping (already folded into `normalized` by
@@ -370,7 +424,14 @@
         // freshly re-migrated copy with new random ids — is what's read
         // back next time.
         if (!hadListening) normalized.listening = seedListening();
-        if (!hadCodingProjects) normalized.codingProjects = seedCodingProjects();
+        if (!hadCodingProjects) {
+          // normalizeState() already ran migrateCodingProjectTasks() against
+          // the pre-seed (empty) codingProjects, so normalized.codingTasks
+          // needs regenerating here to match the freshly seeded projects —
+          // otherwise their seed nextAction values would have no task.
+          normalized.codingProjects = seedCodingProjects();
+          normalized.codingTasks = normalized.codingProjects.map(buildNextActionTask).filter(Boolean);
+        }
         localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
       }
       return normalized;
@@ -398,6 +459,111 @@
     return state.codingProjects.find(function (p) {
       return p.id === id;
     });
+  }
+
+  function findCodingTask(id) {
+    return state.codingTasks.find(function (t) {
+      return t.id === id;
+    });
+  }
+
+  // Only one task per project should normally be isNextAction:true — this
+  // is the single place that enforces it, clearing every sibling task in
+  // the same project before setting it on the chosen one. Tasks in other
+  // projects are never touched.
+  function setNextActionTask(projectId, taskId) {
+    state.codingTasks.forEach(function (t) {
+      if (t.projectId === projectId) t.isNextAction = t.id === taskId;
+    });
+  }
+
+  function codingProjectTasks(projectId) {
+    return state.codingTasks.filter(function (t) {
+      return t.projectId === projectId;
+    });
+  }
+
+  function computeProjectTaskStats(projectId) {
+    var tasks = codingProjectTasks(projectId);
+    var completed = tasks.filter(function (t) {
+      return t.status === "Done";
+    }).length;
+    return {
+      total: tasks.length,
+      completed: completed,
+      percent: tasks.length ? Math.round((completed / tasks.length) * 100) : null,
+    };
+  }
+
+  // Progress is calculated from tasks once a project has any; a project
+  // with zero tasks falls back to its legacy manually-entered value so
+  // nothing already tracked silently drops to 0%.
+  function computeProjectDisplayProgress(project) {
+    var stats = computeProjectTaskStats(project.id);
+    return stats.total > 0 ? stats.percent : Number(project.progress) || 0;
+  }
+
+  // Active task = In Progress or Testing, preferring most-recent
+  // lastWorkedOn, falling back to High priority, then a deterministic id
+  // comparison so ties never reorder between renders.
+  function computeProjectActiveTask(projectId) {
+    var active = codingProjectTasks(projectId).filter(function (t) {
+      return t.status === "In Progress" || t.status === "Testing";
+    });
+    if (!active.length) return null;
+    var priorityRank = { High: 3, Medium: 2, Low: 1 };
+    var sorted = active.slice().sort(function (a, b) {
+      var aDate = a.lastWorkedOn || "";
+      var bDate = b.lastWorkedOn || "";
+      if (aDate !== bDate) return aDate < bDate ? 1 : -1;
+      var pr = (priorityRank[b.priority] || 0) - (priorityRank[a.priority] || 0);
+      if (pr !== 0) return pr;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+    return sorted[0];
+  }
+
+  function computeProjectNextActionTask(projectId) {
+    return (
+      codingProjectTasks(projectId).find(function (t) {
+        return t.isNextAction;
+      }) || null
+    );
+  }
+
+  // Default task ordering: In Progress, Testing, Blocked, Next Action,
+  // High-priority To Do, remaining To Do, Done. Ties broken by id (stable,
+  // deterministic — never reorders on its own between renders).
+  function codingTaskRank(t) {
+    if (t.status === "In Progress") return 0;
+    if (t.status === "Testing") return 1;
+    if (t.status === "Blocked") return 2;
+    if (t.isNextAction) return 3;
+    if (t.status === "To Do" && t.priority === "High") return 4;
+    if (t.status === "To Do") return 5;
+    return 6; // Done
+  }
+
+  function codingProjectSortedTasks(projectId) {
+    return codingProjectTasks(projectId)
+      .slice()
+      .sort(function (a, b) {
+        var r = codingTaskRank(a) - codingTaskRank(b);
+        if (r !== 0) return r;
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      });
+  }
+
+  function codingProjectOptionsHtml(selectedId) {
+    return state.codingProjects
+      .slice()
+      .sort(function (a, b) {
+        return (a.name || "").localeCompare(b.name || "");
+      })
+      .map(function (p) {
+        return '<option value="' + p.id + '"' + (p.id === selectedId ? " selected" : "") + ">" + escapeHtml(p.name) + "</option>";
+      })
+      .join("");
   }
 
   // ===================== HELPERS =====================
@@ -707,11 +873,44 @@
     });
 
     // Parked/Completed/Paused and normal Idea-stage projects are never
-    // flagged — only Building, Testing, or high-priority Planning projects
-    // that have gone quiet, plus anything with a defined next action that
-    // hasn't been touched in a while.
+    // flagged. A project WITH tasks is judged by its tasks (below); a
+    // project with zero tasks yet falls back to the exact legacy
+    // project-level rule that predates this module's task hierarchy, so
+    // nothing regresses for projects that haven't picked up tasks.
     state.codingProjects.forEach(function (p) {
       if (p.status === "Completed" || p.status === "Parked" || p.status === "Paused" || p.status === "Idea") return;
+
+      var tasks = codingProjectTasks(p.id);
+
+      if (tasks.length) {
+        tasks.forEach(function (t) {
+          if (t.status === "Done") return;
+
+          var inactiveDays = t.lastWorkedOn
+            ? daysBetween(t.lastWorkedOn, today)
+            : t.createdAt
+            ? daysBetween(t.createdAt.slice(0, 10), today)
+            : ATTENTION_DAYS_THRESHOLD;
+          var overdue = !!(t.dueDate && t.dueDate < today);
+
+          var reason = null;
+          if (overdue) {
+            reason = "overdue (due " + formatDateNice(t.dueDate) + ")";
+          } else if (t.status === "In Progress" && inactiveDays >= ATTENTION_DAYS_THRESHOLD) {
+            reason = "in progress, inactive " + inactiveDays + " days";
+          } else if (t.status === "Testing" && inactiveDays >= ATTENTION_DAYS_THRESHOLD) {
+            reason = "in testing, inactive " + inactiveDays + " days";
+          } else if (t.priority === "High" && inactiveDays >= ATTENTION_DAYS_THRESHOLD) {
+            reason = "high priority, inactive " + inactiveDays + " days";
+          } else if (t.isNextAction && inactiveDays >= ATTENTION_DAYS_THRESHOLD) {
+            reason = "next action, no activity " + inactiveDays + " days";
+          }
+          if (reason) {
+            items.push({ module: "codingProjects", itemId: p.id, taskId: t.id, label: "💻 " + p.name + ": " + t.title + " — " + reason });
+          }
+        });
+        return;
+      }
 
       var inactiveDays;
       if (p.lastWorkedOn) {
@@ -817,8 +1016,14 @@
         var codingProjectFilterEl = document.getElementById("coding-project-status-filter");
         if (codingProjectFilterEl) codingProjectFilterEl.value = "All";
       }
+      // Deep-linking into a project always exposes its task list, whether
+      // the target is a specific task or the project card itself.
+      if (project) expandedCodingProjectIds[project.id] = true;
       renderCodingProjects();
-      scrollAndHighlight('[data-coding-project-id="' + item.itemId + '"]');
+      var codingTargetSelector = item.taskId
+        ? '[data-coding-task-id="' + item.taskId + '"]'
+        : '[data-coding-project-id="' + item.itemId + '"]';
+      scrollAndHighlight(codingTargetSelector);
     }
   }
 
@@ -1030,23 +1235,29 @@
     var focusHtml;
     var ariaLabel;
     var projectIdAttr = "";
+    var taskIdAttr = "";
 
     if (focus) {
       var p = focus.primary;
+      var displayProgress = computeProjectDisplayProgress(p);
+      var activeTask = computeProjectActiveTask(p.id);
+      var nextActionTask = computeProjectNextActionTask(p.id);
       focusHtml =
         '<div class="stat-card-focus-title">' + escapeHtml(p.name) + "</div>" +
-        '<div class="stat-card-focus-meta">' + escapeHtml(p.status) + " · " + (Number(p.progress) || 0) + "%</div>" +
+        '<div class="stat-card-focus-meta">' + escapeHtml(p.status) + " · " + displayProgress + "%</div>" +
         (focus.extraCount > 0 ? '<div class="stat-card-focus-more">+' + focus.extraCount + " more active</div>" : "") +
-        (p.nextAction ? '<div class="stat-card-focus-next-action">Next: ' + escapeHtml(p.nextAction) + "</div>" : "");
-      ariaLabel = "Open " + p.name + " in Coding Projects";
+        (activeTask ? '<div class="stat-card-focus-next-action">Working on: ' + escapeHtml(activeTask.title) + "</div>" : "") +
+        (nextActionTask ? '<div class="stat-card-focus-next-action">Next: ' + escapeHtml(nextActionTask.title) + "</div>" : "");
+      ariaLabel = activeTask ? "Open " + activeTask.title + " in Coding Projects" : "Open " + p.name + " in Coding Projects";
       projectIdAttr = ' data-coding-focus-project-id="' + p.id + '"';
+      taskIdAttr = activeTask ? ' data-coding-focus-task-id="' + activeTask.id + '"' : "";
     } else {
       focusHtml = '<div class="stat-card-focus-empty">No active coding project</div>';
       ariaLabel = "Open Coding Projects";
     }
 
     return (
-      '<button type="button" class="stat-card" data-color="coding-projects" data-coding-summary-card' + projectIdAttr + ' aria-label="' + escapeHtml(ariaLabel) + '">' +
+      '<button type="button" class="stat-card" data-color="coding-projects" data-coding-summary-card' + projectIdAttr + taskIdAttr + ' aria-label="' + escapeHtml(ariaLabel) + '">' +
       '<div class="stat-card-label">Coding Projects</div>' +
       focusHtml +
       '<div class="stat-card-sub">' + totalCount + " project" + (totalCount === 1 ? "" : "s") + " · " + activeCount + " active · " + plannedCount + " planned</div>" +
@@ -1181,8 +1392,9 @@
     if (codingCardBtn) {
       codingCardBtn.addEventListener("click", function () {
         var projectId = codingCardBtn.getAttribute("data-coding-focus-project-id");
+        var taskId = codingCardBtn.getAttribute("data-coding-focus-task-id");
         if (projectId) {
-          navigateToItem({ module: "codingProjects", itemId: projectId });
+          navigateToItem({ module: "codingProjects", itemId: projectId, taskId: taskId || null });
         } else {
           setActiveTab("codingProjects");
         }
@@ -2623,6 +2835,56 @@
             (p.liveUrl ? '<a class="button button-secondary button-small" href="' + escapeHtml(p.liveUrl) + '" target="_blank" rel="noopener noreferrer">Live App</a>' : "") +
             "</div>";
         }
+
+        var stats = computeProjectTaskStats(p.id);
+        var displayProgress = computeProjectDisplayProgress(p);
+        var activeTask = computeProjectActiveTask(p.id);
+        var nextActionTask = computeProjectNextActionTask(p.id);
+        var expanded = !!expandedCodingProjectIds[p.id];
+
+        var taskSummaryHtml = stats.total
+          ? '<div class="item-card-meta">' + stats.completed + " / " + stats.total + " tasks complete</div>"
+          : '<div class="item-card-meta">No tasks yet</div>';
+        var activeTaskHtml = activeTask ? '<div class="item-card-meta">▶ Working on: ' + escapeHtml(activeTask.title) + "</div>" : "";
+        var nextActionHtml = nextActionTask ? '<div class="item-card-meta">➡ Next: ' + escapeHtml(nextActionTask.title) + "</div>" : "";
+
+        var tasksBlockHtml = "";
+        if (expanded) {
+          var tasks = codingProjectSortedTasks(p.id);
+          tasksBlockHtml =
+            '<div class="coding-tasks-list">' +
+            (tasks.length
+              ? tasks
+                  .map(function (t) {
+                    var overdue = !!(t.dueDate && t.dueDate < todayISO() && t.status !== "Done");
+                    return (
+                      '<div class="coding-task-row' + (t.status === "Done" ? " completed" : "") + '" data-id="' + t.id + '" data-coding-task-id="' + t.id + '">' +
+                      '<div class="coding-task-main">' +
+                      '<div class="coding-task-title">' + escapeHtml(t.title) + (t.isNextAction ? ' <span class="badge badge-next-action">Next Action</span>' : "") + "</div>" +
+                      '<div class="coding-task-meta' + (overdue ? " overdue" : "") + '">' +
+                      (t.dueDate ? "Due " + formatDateNice(t.dueDate) + " · " : "") +
+                      "Last worked on: " + (t.lastWorkedOn ? formatDateNice(t.lastWorkedOn) : "Never") +
+                      "</div>" +
+                      (t.notes ? '<div class="item-card-notes">' + escapeHtml(t.notes) + "</div>" : "") +
+                      "</div>" +
+                      '<span class="badge ' + taskStatusBadgeClass(t.status) + '">' + escapeHtml(t.status) + "</span>" +
+                      '<span class="badge ' + taskPriorityBadgeClass(t.priority) + '">' + escapeHtml(t.priority) + "</span>" +
+                      '<div class="coding-task-actions">' +
+                      (t.isNextAction
+                        ? '<span class="hint-text">★ Next Action</span>'
+                        : '<button class="button button-secondary button-small" data-set-next-action="' + t.id + '" type="button">Set as Next Action</button>') +
+                      '<button class="button button-primary button-small" data-coding-task-worked-today="' + t.id + '" type="button">Worked On Today</button>' +
+                      '<button class="button button-secondary button-small" data-edit-coding-task="' + t.id + '" type="button">Edit</button>' +
+                      '<button class="button button-danger button-small" data-delete-coding-task="' + t.id + '" type="button">Delete</button>' +
+                      "</div>" +
+                      "</div>"
+                    );
+                  })
+                  .join("")
+              : '<div class="empty-state">No tasks yet.</div>') +
+            "</div>";
+        }
+
         return (
           '<div class="item-card" data-id="' + p.id + '" data-coding-project-id="' + p.id + '">' +
           '<div class="item-card-header">' +
@@ -2632,18 +2894,23 @@
           "</div>" +
           '<span class="badge ' + taskStatusBadgeClass(p.status) + '">' + escapeHtml(p.status) + "</span>" +
           "</div>" +
-          confidenceBarHtml(p.progress, "Progress") +
+          confidenceBarHtml(displayProgress, "Progress") +
+          taskSummaryHtml +
+          activeTaskHtml +
+          nextActionHtml +
           (p.milestone ? '<div class="item-card-meta">🎯 ' + escapeHtml(p.milestone) + "</div>" : "") +
-          (p.nextAction ? '<div class="item-card-meta">➡ ' + escapeHtml(p.nextAction) + "</div>" : "") +
           '<div class="item-card-meta">Last worked on: ' + (p.lastWorkedOn ? formatDateNice(p.lastWorkedOn) : "Never") + "</div>" +
           (p.techStack ? '<div class="item-card-meta">🛠 ' + escapeHtml(p.techStack) + "</div>" : "") +
           (p.notes ? '<div class="item-card-notes">' + escapeHtml(p.notes) + "</div>" : "") +
           linksHtml +
           '<div class="item-card-actions">' +
+          '<button class="button button-secondary button-small" data-toggle-coding-tasks="' + p.id + '" type="button">' + (expanded ? "Hide Tasks" : "Show Tasks (" + stats.total + ")") + "</button>" +
+          '<button class="button button-secondary button-small" data-add-coding-task-to="' + p.id + '" type="button">+ Task</button>' +
           '<button class="button button-primary button-small" data-worked-today="' + p.id + '" type="button">Worked On Today</button>' +
           '<button class="button button-secondary button-small" data-edit-coding-project="' + p.id + '" type="button">Edit</button>' +
           '<button class="button button-danger button-small" data-delete-coding-project="' + p.id + '" type="button">Delete</button>' +
           "</div>" +
+          tasksBlockHtml +
           "</div>"
         );
       })
@@ -2654,6 +2921,8 @@
         var id = btn.getAttribute("data-worked-today");
         var project = findCodingProject(id);
         if (!project) return;
+        // Project-level "Worked On Today" is intentionally one-directional:
+        // it never touches any individual task's lastWorkedOn.
         project.lastWorkedOn = todayISO();
         project.updatedAt = new Date().toISOString();
         saveState();
@@ -2669,13 +2938,85 @@
     el.querySelectorAll("[data-delete-coding-project]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var id = btn.getAttribute("data-delete-coding-project");
-        if (!confirm("Delete this coding project?")) return;
+        var project = findCodingProject(id);
+        if (!project) return;
+        var taskCount = codingProjectTasks(id).length;
+        var msg = taskCount
+          ? 'Delete "' + project.name + '" and its ' + taskCount + " task" + (taskCount === 1 ? "" : "s") + "?"
+          : 'Delete "' + project.name + '"?';
+        if (!confirm(msg)) return;
         state.codingProjects = state.codingProjects.filter(function (p) {
           return p.id !== id;
         });
+        state.codingTasks = state.codingTasks.filter(function (t) {
+          return t.projectId !== id;
+        });
+        delete expandedCodingProjectIds[id];
         saveState();
         renderAll();
         showToast("Project deleted");
+      });
+    });
+    el.querySelectorAll("[data-toggle-coding-tasks]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-toggle-coding-tasks");
+        expandedCodingProjectIds[id] = !expandedCodingProjectIds[id];
+        renderCodingProjects();
+      });
+    });
+    el.querySelectorAll("[data-add-coding-task-to]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        openCodingTaskModal(null, btn.getAttribute("data-add-coding-task-to"));
+      });
+    });
+    el.querySelectorAll("[data-edit-coding-task]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        openCodingTaskModal(btn.getAttribute("data-edit-coding-task"), null);
+      });
+    });
+    el.querySelectorAll("[data-delete-coding-task]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-delete-coding-task");
+        if (!confirm("Delete this task?")) return;
+        state.codingTasks = state.codingTasks.filter(function (t) {
+          return t.id !== id;
+        });
+        saveState();
+        renderAll();
+        showToast("Task deleted");
+      });
+    });
+    el.querySelectorAll("[data-set-next-action]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-set-next-action");
+        var task = findCodingTask(id);
+        if (!task) return;
+        setNextActionTask(task.projectId, task.id);
+        saveState();
+        renderAll();
+        showToast(task.title + " set as Next Action");
+      });
+    });
+    el.querySelectorAll("[data-coding-task-worked-today]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-coding-task-worked-today");
+        var task = findCodingTask(id);
+        if (!task) return;
+        // Working on a task counts as working on its project: both get
+        // stamped together. This does not run in reverse - see the
+        // project-level Worked On Today handler above.
+        var today = todayISO();
+        var now = new Date().toISOString();
+        task.lastWorkedOn = today;
+        task.updatedAt = now;
+        var project = findCodingProject(task.projectId);
+        if (project) {
+          project.lastWorkedOn = today;
+          project.updatedAt = now;
+        }
+        saveState();
+        renderAll();
+        showToast(task.title + " marked worked on today");
       });
     });
   }
@@ -2731,6 +3072,7 @@
       '<input id="cpf-progress" name="progress" type="range" min="0" max="100" step="5" value="' + (Number(project.progress) || 0) + '">' +
       "</div>" +
       "</div>" +
+      '<p class="hint-text">Progress is calculated automatically once this project has tasks. This value is only used before then.</p>' +
       '<div class="form-group">' +
       '<label for="cpf-techstack">Tech Stack</label>' +
       '<input id="cpf-techstack" name="techStack" type="text" placeholder="e.g. HTML, CSS, JavaScript" value="' + escapeHtml(project.techStack) + '">' +
@@ -2738,10 +3080,6 @@
       '<div class="form-group">' +
       '<label for="cpf-milestone">Current Milestone</label>' +
       '<input id="cpf-milestone" name="milestone" type="text" value="' + escapeHtml(project.milestone) + '">' +
-      "</div>" +
-      '<div class="form-group">' +
-      '<label for="cpf-next-action">Next Action</label>' +
-      '<input id="cpf-next-action" name="nextAction" type="text" value="' + escapeHtml(project.nextAction) + '">' +
       "</div>" +
       '<div class="form-group">' +
       '<label for="cpf-github">GitHub Repository URL</label>' +
@@ -2787,7 +3125,6 @@
           progress: progress,
           techStack: formData.get("techStack").trim(),
           milestone: formData.get("milestone").trim(),
-          nextAction: formData.get("nextAction").trim(),
           githubUrl: formData.get("githubUrl").trim(),
           liveUrl: formData.get("liveUrl").trim(),
           notes: formData.get("notes").trim(),
@@ -2819,6 +3156,99 @@
         }
       }
     );
+  }
+
+  function codingTaskFieldsHtml(task, defaultProjectId) {
+    task = task || {
+      projectId: defaultProjectId || (state.codingProjects[0] && state.codingProjects[0].id) || "",
+      title: "",
+      status: "To Do",
+      priority: "Medium",
+      dueDate: "",
+      notes: "",
+    };
+    return (
+      '<div class="form-group">' +
+      '<label for="ctf-project">Project</label>' +
+      '<select id="ctf-project" name="projectId" required>' + codingProjectOptionsHtml(task.projectId) + "</select>" +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="ctf-title">Task Title</label>' +
+      '<input id="ctf-title" name="title" type="text" required value="' + escapeHtml(task.title) + '">' +
+      "</div>" +
+      '<div class="form-row">' +
+      '<div class="form-group">' +
+      '<label for="ctf-status">Status</label>' +
+      '<select id="ctf-status" name="status">' +
+      CODING_TASK_STATUSES.map(function (s) {
+        return '<option value="' + s + '"' + (task.status === s ? " selected" : "") + ">" + s + "</option>";
+      }).join("") +
+      "</select>" +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="ctf-priority">Priority</label>' +
+      '<select id="ctf-priority" name="priority">' +
+      TASK_PRIORITIES.map(function (p) {
+        return '<option value="' + p + '"' + (task.priority === p ? " selected" : "") + ">" + p + "</option>";
+      }).join("") +
+      "</select>" +
+      "</div>" +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="ctf-due">Due Date</label>' +
+      '<input id="ctf-due" name="dueDate" type="date" value="' + escapeHtml(task.dueDate) + '">' +
+      "</div>" +
+      '<div class="form-group">' +
+      '<label for="ctf-notes">Notes</label>' +
+      '<textarea id="ctf-notes" name="notes" rows="3">' + escapeHtml(task.notes) + "</textarea>" +
+      "</div>"
+    );
+  }
+
+  function openCodingTaskModal(id, defaultProjectId) {
+    if (!state.codingProjects.length) {
+      showToast("Add a project first");
+      return;
+    }
+    var task = id ? findCodingTask(id) : null;
+    openModal(task ? "Edit Task" : "Add Task", codingTaskFieldsHtml(task, defaultProjectId), function (formData) {
+      var data = {
+        projectId: formData.get("projectId"),
+        title: formData.get("title").trim(),
+        status: formData.get("status"),
+        priority: formData.get("priority"),
+        dueDate: formData.get("dueDate") || "",
+        notes: formData.get("notes").trim(),
+        updatedAt: new Date().toISOString(),
+      };
+      if (!data.title || !data.projectId) return;
+      if (task) {
+        var projectChanged = task.projectId !== data.projectId;
+        data.createdAt = task.createdAt || task.updatedAt || data.updatedAt;
+        data.lastWorkedOn = task.lastWorkedOn || null;
+        // Next Action rule: completing the current Next Action task clears
+        // the flag rather than silently reassigning it to another task -
+        // the user picks the next one explicitly via "Set as Next Action".
+        data.isNextAction = data.status === "Done" ? false : task.isNextAction;
+        Object.assign(task, data);
+        // Moving a task to a different project could otherwise leave that
+        // project with two isNextAction:true tasks - re-enforce uniqueness
+        // in the destination project when that's the case.
+        if (projectChanged && task.isNextAction) {
+          setNextActionTask(task.projectId, task.id);
+        }
+      } else {
+        data.id = generateId();
+        data.createdAt = data.updatedAt;
+        data.lastWorkedOn = null;
+        data.isNextAction = false;
+        state.codingTasks.push(data);
+      }
+      saveState();
+      renderAll();
+      closeModal();
+      showToast(task ? "Task updated" : "Task added");
+    });
   }
 
   function initCodingProjectFilter() {
@@ -2944,7 +3374,7 @@
           return;
         }
         existingKeys[key] = true;
-        state.codingProjects.push({
+        var newProject = {
           id: generateId(),
           name: row.name,
           type: row.type,
@@ -2960,7 +3390,10 @@
           lastWorkedOn: null,
           createdAt: now,
           updatedAt: now,
-        });
+        };
+        state.codingProjects.push(newProject);
+        var nextActionTask = buildNextActionTask(newProject);
+        if (nextActionTask) state.codingTasks.push(nextActionTask);
         added++;
       });
 
@@ -2989,7 +3422,8 @@
       (s.studyTopics && s.studyTopics.length) ||
       (s.studyTasks && s.studyTasks.length) ||
       (s.listening && s.listening.length) ||
-      (s.codingProjects && s.codingProjects.length)
+      (s.codingProjects && s.codingProjects.length) ||
+      (s.codingTasks && s.codingTasks.length)
     );
   }
 
