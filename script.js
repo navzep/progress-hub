@@ -2910,7 +2910,7 @@
         var toggleLabel = "Tasks (" + stats.total + ") " + (expanded ? "▴" : "▾");
 
         return (
-          '<div class="item-card coding-project-card" data-id="' + p.id + '" data-coding-project-id="' + p.id + '">' +
+          '<div class="item-card coding-project-card' + (expanded ? " is-expanded" : "") + '" data-id="' + p.id + '" data-coding-project-id="' + p.id + '">' +
           '<div class="item-card-header">' +
           '<div>' +
           '<div class="item-card-title">' + escapeHtml(p.name) + "</div>" +
