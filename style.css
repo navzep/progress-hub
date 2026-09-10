@@ -1112,19 +1112,11 @@ button.session-row:focus-visible {
   margin-top: 8px;
 }
 
-/* Expanded project cards get more horizontal room to read as a workspace
+/* Expanded project cards take the full row width to read as a workspace
    for large task lists instead of a long narrow column. Collapsed cards
-   are untouched and keep flowing in the normal grid. align-items:start
-   above already stops this from stretching row-mates to match height. */
+   are untouched and keep flowing in the normal grid at their compact
+   width. align-items:start above already stops this from stretching
+   row-mates to match height. */
 .coding-project-card.is-expanded {
-  grid-column: span 2;
-}
-
-/* iPad and narrower: a 2-column span is already the full row width (or
-   wider than what's available), so make it explicit rather than relying
-   on the grid to clamp it. */
-@media (max-width: 1024px) {
-  .coding-project-card.is-expanded {
-    grid-column: 1 / -1;
-  }
+  grid-column: 1 / -1;
 }
