@@ -54,6 +54,8 @@
   var codingProjectFilter = "All";
   var expandedCodingProjectIds = {};
   var expandedStudySubjectIds = {};
+  var archivedCodingSectionExpanded = false;
+  var openManagementMenu = null;
 
   var activeTimer = {
     itemId: null,
@@ -216,6 +218,7 @@
         githubUrl: "",
         liveUrl: "",
         notes: "",
+        archived: false,
         lastWorkedOn: null,
         createdAt: now,
         updatedAt: now,
@@ -233,6 +236,7 @@
         githubUrl: "",
         liveUrl: "",
         notes: "",
+        archived: false,
         lastWorkedOn: null,
         createdAt: now,
         updatedAt: now,
@@ -259,6 +263,7 @@
       notes: "",
       lastWorkedOn: null,
       isNextAction: true,
+      archived: false,
       createdAt: project.updatedAt || project.createdAt || now,
       updatedAt: project.updatedAt || project.createdAt || now,
     };
@@ -484,8 +489,47 @@
     });
   }
 
+  // Archive is reversible and separate from Delete - archived
+  // projects/tasks keep every field, they're just excluded from active
+  // calculations and the active grid. isArchived() is the one place that
+  // reads the flag so nothing has to special-case a missing/undefined
+  // value on legacy records (they read as false, same as archived:false).
+  function isArchived(item) {
+    return !!(item && item.archived);
+  }
+
+  // A task is *effectively* archived - hidden from active views/calcs -
+  // if it was archived directly, or if its parent project was archived
+  // (archiving a project never rewrites its tasks' own archived flag, so
+  // this is the only place that needs to know about the parent). This is
+  // also what makes restoring a task always safe: flipping a task's own
+  // flag back to false can never make it visible while its parent is
+  // still archived, so there's no "invisible active task" edge case to
+  // guard against separately - see the archive/restore handlers below.
+  function isCodingTaskEffectivelyArchived(task) {
+    if (isArchived(task)) return true;
+    var project = findCodingProject(task.projectId);
+    return isArchived(project);
+  }
+
+  function activeCodingProjects() {
+    return state.codingProjects.filter(function (p) {
+      return !isArchived(p);
+    });
+  }
+
+  function archivedCodingProjects() {
+    return state.codingProjects.filter(isArchived);
+  }
+
+  function activeCodingProjectTasks(projectId) {
+    return codingProjectTasks(projectId).filter(function (t) {
+      return !isCodingTaskEffectivelyArchived(t);
+    });
+  }
+
   function computeProjectTaskStats(projectId) {
-    var tasks = codingProjectTasks(projectId);
+    var tasks = activeCodingProjectTasks(projectId);
     var completed = tasks.filter(function (t) {
       return t.status === "Done";
     }).length;
@@ -508,7 +552,7 @@
   // lastWorkedOn, falling back to High priority, then a deterministic id
   // comparison so ties never reorder between renders.
   function computeProjectActiveTask(projectId) {
-    var active = codingProjectTasks(projectId).filter(function (t) {
+    var active = activeCodingProjectTasks(projectId).filter(function (t) {
       return t.status === "In Progress" || t.status === "Testing";
     });
     if (!active.length) return null;
@@ -526,7 +570,7 @@
 
   function computeProjectNextActionTask(projectId) {
     return (
-      codingProjectTasks(projectId).find(function (t) {
+      activeCodingProjectTasks(projectId).find(function (t) {
         return t.isNextAction;
       }) || null
     );
@@ -546,6 +590,19 @@
   }
 
   function codingProjectSortedTasks(projectId) {
+    return activeCodingProjectTasks(projectId)
+      .slice()
+      .sort(function (a, b) {
+        var r = codingTaskRank(a) - codingTaskRank(b);
+        if (r !== 0) return r;
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      });
+  }
+
+  // Every task that's part of an archived project's history - both tasks
+  // archived individually and ones only hidden via the parent - so
+  // expanding an archived project shows its full retained task list.
+  function codingProjectAllTasksSorted(projectId) {
     return codingProjectTasks(projectId)
       .slice()
       .sort(function (a, b) {
@@ -555,8 +612,16 @@
       });
   }
 
+  // Excludes archived projects from the "assign to" dropdown - moving an
+  // active task into one would immediately hide it via the parent check
+  // in isCodingTaskEffectivelyArchived(). The task's *current* project
+  // stays listed even if archived, so editing an already-archived task
+  // still shows its real assignment instead of silently dropping it.
   function codingProjectOptionsHtml(selectedId) {
     return state.codingProjects
+      .filter(function (p) {
+        return !isArchived(p) || p.id === selectedId;
+      })
       .slice()
       .sort(function (a, b) {
         return (a.name || "").localeCompare(b.name || "");
@@ -878,10 +943,10 @@
     // project with zero tasks yet falls back to the exact legacy
     // project-level rule that predates this module's task hierarchy, so
     // nothing regresses for projects that haven't picked up tasks.
-    state.codingProjects.forEach(function (p) {
+    activeCodingProjects().forEach(function (p) {
       if (p.status === "Completed" || p.status === "Parked" || p.status === "Paused" || p.status === "Idea") return;
 
-      var tasks = codingProjectTasks(p.id);
+      var tasks = activeCodingProjectTasks(p.id);
 
       if (tasks.length) {
         tasks.forEach(function (t) {
@@ -1016,7 +1081,16 @@
       scrollAndHighlight('[data-listening-id="' + item.itemId + '"]');
     } else if (item.module === "codingProjects") {
       var project = findCodingProject(item.itemId);
-      if (project && codingProjectFilter !== "All" && !codingProjectMatchesFilter(project)) {
+      var targetTask = item.taskId ? findCodingTask(item.taskId) : null;
+      // Under normal operation an archived item is never the deep-link
+      // target (Dashboard/Attention already exclude archived content from
+      // their selection), but handle it explicitly rather than silently
+      // failing to find it in the active grid - reveal it in the Archived
+      // section instead, by the same stable ID.
+      var targetIsArchived = isArchived(project) || (targetTask && isCodingTaskEffectivelyArchived(targetTask));
+      if (targetIsArchived) {
+        archivedCodingSectionExpanded = true;
+      } else if (project && codingProjectFilter !== "All" && !codingProjectMatchesFilter(project)) {
         codingProjectFilter = "All";
         var codingProjectFilterEl = document.getElementById("coding-project-status-filter");
         if (codingProjectFilterEl) codingProjectFilterEl.value = "All";
@@ -1139,7 +1213,7 @@
   // when neither candidate has a lastWorkedOn date at all). Mirrors
   // computeCurrentStudyFocus()'s selection logic exactly.
   function computeCurrentCodingFocus() {
-    var active = state.codingProjects.filter(function (p) {
+    var active = activeCodingProjects().filter(function (p) {
       return p.status === "Building" || p.status === "Testing";
     });
     if (!active.length) return null;
@@ -1280,11 +1354,12 @@
   // whole-tile-is-one-button click behavior as the Study tile.
   function codingProjectsStatCardHtml() {
     var focus = computeCurrentCodingFocus();
-    var totalCount = state.codingProjects.length;
-    var activeCount = state.codingProjects.filter(function (p) {
+    var nonArchived = activeCodingProjects();
+    var totalCount = nonArchived.length;
+    var activeCount = nonArchived.filter(function (p) {
       return p.status === "Building" || p.status === "Testing";
     }).length;
-    var plannedCount = state.codingProjects.filter(function (p) {
+    var plannedCount = nonArchived.filter(function (p) {
       return p.status === "Idea" || p.status === "Planning";
     }).length;
 
@@ -2996,15 +3071,190 @@
     }).join("");
   }
 
+  // Compact "⋯" trigger + popover used for a card/row's less-frequent
+  // actions. Generic by design - itemsHtml is just a list of .menu-item
+  // buttons, so any module can reuse this (Study is expected to next).
+  function managementMenuHtml(itemsHtml, ariaLabel) {
+    return (
+      '<div class="menu-wrap">' +
+      '<button class="icon-button menu-trigger" type="button" data-menu-trigger aria-haspopup="true" aria-expanded="false" aria-label="' + escapeHtml(ariaLabel) + '">⋯</button>' +
+      '<div class="menu-panel" role="menu" hidden>' + itemsHtml + "</div>" +
+      "</div>"
+    );
+  }
+
+  function closeOpenManagementMenu() {
+    if (!openManagementMenu) return;
+    openManagementMenu.hidden = true;
+    var trigger = openManagementMenu.previousElementSibling;
+    if (trigger) trigger.setAttribute("aria-expanded", "false");
+    openManagementMenu = null;
+  }
+
+  // Document-level close-on-outside-click / close-on-Escape, registered
+  // once at startup (not per-render, since `document` itself is never
+  // recreated). wireManagementMenuTriggers() below is the per-render half
+  // that only has to (re)bind each trigger button's own click.
+  function initManagementMenus() {
+    document.addEventListener("click", function (e) {
+      if (openManagementMenu && !openManagementMenu.parentElement.contains(e.target)) {
+        closeOpenManagementMenu();
+      }
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && openManagementMenu) {
+        var trigger = openManagementMenu.previousElementSibling;
+        closeOpenManagementMenu();
+        if (trigger) trigger.focus();
+      }
+    });
+  }
+
+  function wireManagementMenuTriggers(root) {
+    root.querySelectorAll("[data-menu-trigger]").forEach(function (trigger) {
+      trigger.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var panel = trigger.nextElementSibling;
+        var wasOpen = !panel.hidden;
+        closeOpenManagementMenu();
+        if (!wasOpen) {
+          panel.hidden = false;
+          trigger.setAttribute("aria-expanded", "true");
+          openManagementMenu = panel;
+        }
+      });
+    });
+  }
+
   function renderCodingProjects() {
     var el = document.getElementById("coding-projects-list");
-    var filtered = state.codingProjects.filter(codingProjectMatchesFilter);
+    var filtered = activeCodingProjects().filter(codingProjectMatchesFilter);
 
     if (!filtered.length) {
       el.innerHTML = '<div class="empty-state">No coding projects' + (codingProjectFilter !== "All" ? ' matching "' + escapeHtml(codingProjectFilter) + '"' : "") + ". Add one to start tracking.</div>";
-      return;
+    } else {
+      renderActiveCodingProjectsGrid(el, filtered);
     }
 
+    renderArchivedCodingSection();
+    wireManagementMenuTriggers(document);
+
+    // Edit/Delete/Archive/Restore/expand-toggle are shared across the
+    // active grid and the Archived section, so they're wired once,
+    // document-wide, after both have rendered - rather than duplicating
+    // each handler per container.
+    document.querySelectorAll("[data-toggle-coding-tasks]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-toggle-coding-tasks");
+        expandedCodingProjectIds[id] = !expandedCodingProjectIds[id];
+        renderCodingProjects();
+      });
+    });
+    document.querySelectorAll("[data-edit-coding-project]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        openCodingProjectModal(btn.getAttribute("data-edit-coding-project"));
+      });
+    });
+    document.querySelectorAll("[data-delete-coding-project]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-delete-coding-project");
+        var project = findCodingProject(id);
+        if (!project) return;
+        var taskCount = codingProjectTasks(id).length;
+        var msg = taskCount
+          ? 'Delete "' + project.name + '" and its ' + taskCount + " task" + (taskCount === 1 ? "" : "s") + "?"
+          : 'Delete "' + project.name + '"?';
+        if (!confirm(msg)) return;
+        state.codingProjects = state.codingProjects.filter(function (p) {
+          return p.id !== id;
+        });
+        state.codingTasks = state.codingTasks.filter(function (t) {
+          return t.projectId !== id;
+        });
+        delete expandedCodingProjectIds[id];
+        saveState();
+        renderAll();
+        showToast("Project deleted");
+      });
+    });
+    document.querySelectorAll("[data-archive-coding-project]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-archive-coding-project");
+        var project = findCodingProject(id);
+        if (!project) return;
+        // Archiving never touches child tasks - they keep whatever
+        // archived value they already had; isCodingTaskEffectivelyArchived()
+        // is what hides them from active views via the parent check.
+        project.archived = true;
+        project.updatedAt = new Date().toISOString();
+        saveState();
+        renderAll();
+        showToast(project.name + " archived");
+      });
+    });
+    document.querySelectorAll("[data-restore-coding-project]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-restore-coding-project");
+        var project = findCodingProject(id);
+        if (!project) return;
+        project.archived = false;
+        project.updatedAt = new Date().toISOString();
+        saveState();
+        renderAll();
+        showToast(project.name + " restored");
+      });
+    });
+    document.querySelectorAll("[data-edit-coding-task]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        openCodingTaskModal(btn.getAttribute("data-edit-coding-task"), null);
+      });
+    });
+    document.querySelectorAll("[data-delete-coding-task]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-delete-coding-task");
+        if (!confirm("Delete this task?")) return;
+        state.codingTasks = state.codingTasks.filter(function (t) {
+          return t.id !== id;
+        });
+        saveState();
+        renderAll();
+        showToast("Task deleted");
+      });
+    });
+    document.querySelectorAll("[data-archive-coding-task]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-archive-coding-task");
+        var task = findCodingTask(id);
+        if (!task) return;
+        // Fields (status, priority, due date, notes, lastWorkedOn,
+        // isNextAction) are left exactly as-is - archiving only ever
+        // toggles this one flag, so restoring brings everything back
+        // unchanged, including whether it was the project's Next Action.
+        task.archived = true;
+        task.updatedAt = new Date().toISOString();
+        saveState();
+        renderAll();
+        showToast(task.title + " archived");
+      });
+    });
+    document.querySelectorAll("[data-restore-coding-task]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-restore-coding-task");
+        var task = findCodingTask(id);
+        if (!task) return;
+        // Always safe: if the parent project is still archived, this task
+        // stays invisible via isCodingTaskEffectivelyArchived()'s parent
+        // check - restoring the project later reveals it automatically.
+        task.archived = false;
+        task.updatedAt = new Date().toISOString();
+        saveState();
+        renderAll();
+        showToast(task.title + " restored");
+      });
+    });
+  }
+
+  function renderActiveCodingProjectsGrid(el, filtered) {
     var sorted = filtered.slice().sort(function (a, b) {
       return (b.updatedAt || "").localeCompare(a.updatedAt || "");
     });
@@ -3081,8 +3331,12 @@
                         ? '<span class="hint-text">★ Next Action</span>'
                         : '<button class="button button-secondary button-small" data-set-next-action="' + t.id + '" type="button">Set as Next Action</button>') +
                       '<button class="button button-secondary button-small" data-coding-task-worked-today="' + t.id + '" type="button">Worked On Today</button>' +
-                      '<button class="button button-secondary button-small" data-edit-coding-task="' + t.id + '" type="button">Edit</button>' +
-                      '<button class="button button-danger button-small" data-delete-coding-task="' + t.id + '" type="button">Delete</button>' +
+                      managementMenuHtml(
+                        '<button class="menu-item" role="menuitem" data-edit-coding-task="' + t.id + '" type="button">Edit</button>' +
+                        '<button class="menu-item" role="menuitem" data-archive-coding-task="' + t.id + '" type="button">Archive</button>' +
+                        '<button class="menu-item menu-item-danger" role="menuitem" data-delete-coding-task="' + t.id + '" type="button">Delete</button>',
+                        "More actions for " + t.title
+                      ) +
                       "</div>" +
                       "</div>" +
                       "</div>"
@@ -3114,8 +3368,12 @@
           '<button class="button button-primary button-small" data-add-coding-task-to="' + p.id + '" type="button">+ Task</button>' +
           '<button class="button button-secondary button-small" data-import-coding-tasks-to="' + p.id + '" type="button">Import Tasks</button>' +
           '<button class="button button-secondary button-small" data-worked-today="' + p.id + '" type="button">Worked On Today</button>' +
-          '<button class="button button-secondary button-small" data-edit-coding-project="' + p.id + '" type="button">Edit</button>' +
-          '<button class="button button-danger button-small" data-delete-coding-project="' + p.id + '" type="button">Delete</button>' +
+          managementMenuHtml(
+            '<button class="menu-item" role="menuitem" data-edit-coding-project="' + p.id + '" type="button">Edit</button>' +
+            '<button class="menu-item" role="menuitem" data-archive-coding-project="' + p.id + '" type="button">Archive</button>' +
+            '<button class="menu-item menu-item-danger" role="menuitem" data-delete-coding-project="' + p.id + '" type="button">Delete</button>',
+            "More actions for " + p.name
+          ) +
           "</div>" +
           tasksBlockHtml +
           "</div>"
@@ -3137,40 +3395,6 @@
         showToast(project.name + " marked worked on today");
       });
     });
-    el.querySelectorAll("[data-edit-coding-project]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        openCodingProjectModal(btn.getAttribute("data-edit-coding-project"));
-      });
-    });
-    el.querySelectorAll("[data-delete-coding-project]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var id = btn.getAttribute("data-delete-coding-project");
-        var project = findCodingProject(id);
-        if (!project) return;
-        var taskCount = codingProjectTasks(id).length;
-        var msg = taskCount
-          ? 'Delete "' + project.name + '" and its ' + taskCount + " task" + (taskCount === 1 ? "" : "s") + "?"
-          : 'Delete "' + project.name + '"?';
-        if (!confirm(msg)) return;
-        state.codingProjects = state.codingProjects.filter(function (p) {
-          return p.id !== id;
-        });
-        state.codingTasks = state.codingTasks.filter(function (t) {
-          return t.projectId !== id;
-        });
-        delete expandedCodingProjectIds[id];
-        saveState();
-        renderAll();
-        showToast("Project deleted");
-      });
-    });
-    el.querySelectorAll("[data-toggle-coding-tasks]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var id = btn.getAttribute("data-toggle-coding-tasks");
-        expandedCodingProjectIds[id] = !expandedCodingProjectIds[id];
-        renderCodingProjects();
-      });
-    });
     el.querySelectorAll("[data-add-coding-task-to]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         openCodingTaskModal(null, btn.getAttribute("data-add-coding-task-to"));
@@ -3179,23 +3403,6 @@
     el.querySelectorAll("[data-import-coding-tasks-to]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         openImportCodingTasksModal(btn.getAttribute("data-import-coding-tasks-to"));
-      });
-    });
-    el.querySelectorAll("[data-edit-coding-task]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        openCodingTaskModal(btn.getAttribute("data-edit-coding-task"), null);
-      });
-    });
-    el.querySelectorAll("[data-delete-coding-task]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var id = btn.getAttribute("data-delete-coding-task");
-        if (!confirm("Delete this task?")) return;
-        state.codingTasks = state.codingTasks.filter(function (t) {
-          return t.id !== id;
-        });
-        saveState();
-        renderAll();
-        showToast("Task deleted");
       });
     });
     el.querySelectorAll("[data-set-coding-task-status]").forEach(function (sel) {
@@ -3248,6 +3455,150 @@
         showToast(task.title + " marked worked on today");
       });
     });
+  }
+
+  // One archived task row, reused for both a standalone listing (task
+  // archived, parent project still active - shows which project it
+  // belongs to) and nested inside an expanded archived project (no
+  // project name needed, already implied by the parent card). Restore
+  // only shows when the task's own flag is what's archiving it - a task
+  // only swept up via an archived parent has nothing to restore at the
+  // task level, so only Edit/Delete appear; restoring the project (its
+  // own visible action) is what brings it back.
+  function archivedCodingTaskRowHtml(t, project, nested) {
+    var contextLine = !nested && project ? '<div class="coding-task-meta">In ' + escapeHtml(project.name) + "</div>" : "";
+    var showRestore = isArchived(t);
+    return (
+      '<div class="coding-task-row' + (t.status === "Done" ? " completed" : "") + ' coding-archived-card" data-id="' + t.id + '" data-coding-task-id="' + t.id + '">' +
+      '<div class="coding-task-main">' +
+      '<div class="coding-task-title">' + escapeHtml(t.title) + (t.isNextAction ? ' <span class="badge badge-next-action">Next Action</span>' : "") + "</div>" +
+      '<div class="coding-task-badges">' +
+      '<span class="badge ' + taskStatusBadgeClass(t.status) + '">' + escapeHtml(t.status) + "</span>" +
+      '<span class="badge ' + taskPriorityBadgeClass(t.priority) + '">' + escapeHtml(t.priority) + "</span>" +
+      "</div>" +
+      '<div class="coding-task-meta">' +
+      (t.dueDate ? "Due " + formatDateNice(t.dueDate) + " · " : "") +
+      "Last worked on: " + (t.lastWorkedOn ? formatDateNice(t.lastWorkedOn) : "Never") +
+      "</div>" +
+      contextLine +
+      (t.notes ? '<div class="item-card-notes">' + escapeHtml(t.notes) + "</div>" : "") +
+      '<div class="coding-task-actions">' +
+      (showRestore ? '<button class="button button-secondary button-small" data-restore-coding-task="' + t.id + '" type="button">Restore</button>' : "") +
+      managementMenuHtml(
+        '<button class="menu-item" role="menuitem" data-edit-coding-task="' + t.id + '" type="button">Edit</button>' +
+        '<button class="menu-item menu-item-danger" role="menuitem" data-delete-coding-task="' + t.id + '" type="button">Delete</button>',
+        "More actions for " + t.title
+      ) +
+      "</div>" +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  // Archived project card: compact by design (no progress bar / focus
+  // group - those are active-workspace concepts) but still expandable to
+  // inspect its full retained task history, including tasks that were
+  // never individually archived (they're only hidden via this parent).
+  function archivedCodingProjectCardHtml(p) {
+    var allTasks = codingProjectTasks(p.id);
+    var doneCount = allTasks.filter(function (t) {
+      return t.status === "Done";
+    }).length;
+    var expanded = !!expandedCodingProjectIds[p.id];
+
+    var tasksBlockHtml = "";
+    if (expanded) {
+      var tasks = codingProjectAllTasksSorted(p.id);
+      tasksBlockHtml =
+        '<div class="coding-tasks-list">' +
+        (tasks.length
+          ? tasks
+              .map(function (t) {
+                return archivedCodingTaskRowHtml(t, p, true);
+              })
+              .join("")
+          : '<div class="empty-state">No tasks yet.</div>') +
+        "</div>";
+    }
+
+    var toggleLabel = "Tasks (" + allTasks.length + ") " + (expanded ? "▴" : "▾");
+
+    return (
+      '<div class="item-card coding-project-card coding-archived-card" data-id="' + p.id + '" data-coding-project-id="' + p.id + '">' +
+      '<div class="item-card-header">' +
+      '<div>' +
+      '<div class="item-card-title">' + escapeHtml(p.name) + "</div>" +
+      '<div class="item-card-meta">' + escapeHtml(p.type) + " · " + escapeHtml(p.priority) + " priority</div>" +
+      "</div>" +
+      '<span class="badge ' + taskStatusBadgeClass(p.status) + '">' + escapeHtml(p.status) + "</span>" +
+      "</div>" +
+      '<div class="item-card-meta">' + (allTasks.length ? doneCount + " / " + allTasks.length + " tasks complete" : "No tasks") + " · Last worked on: " + (p.lastWorkedOn ? formatDateNice(p.lastWorkedOn) : "Never") + "</div>" +
+      '<button class="coding-tasks-toggle" data-toggle-coding-tasks="' + p.id + '" type="button" aria-expanded="' + (expanded ? "true" : "false") + '">' + toggleLabel + "</button>" +
+      '<div class="coding-project-actions">' +
+      '<button class="button button-secondary button-small" data-restore-coding-project="' + p.id + '" type="button">Restore</button>' +
+      managementMenuHtml(
+        '<button class="menu-item" role="menuitem" data-edit-coding-project="' + p.id + '" type="button">Edit</button>' +
+        '<button class="menu-item menu-item-danger" role="menuitem" data-delete-coding-project="' + p.id + '" type="button">Delete</button>',
+        "More actions for " + p.name
+      ) +
+      "</div>" +
+      tasksBlockHtml +
+      "</div>"
+    );
+  }
+
+  function renderArchivedCodingSection() {
+    var toggleBtn = document.getElementById("coding-archived-toggle");
+    var container = document.getElementById("coding-archived-section");
+    if (!toggleBtn || !container) return;
+
+    var archivedProjects = archivedCodingProjects().slice().sort(function (a, b) {
+      return (b.updatedAt || "").localeCompare(a.updatedAt || "");
+    });
+    // Archived tasks whose project is still active - a task archived
+    // inside an archived project is reached by expanding that project
+    // instead, so it isn't duplicated here.
+    var standaloneArchivedTasks = state.codingTasks
+      .filter(function (t) {
+        return isArchived(t) && !isArchived(findCodingProject(t.projectId));
+      })
+      .sort(function (a, b) {
+        return (b.updatedAt || "").localeCompare(a.updatedAt || "");
+      });
+
+    var totalCount = archivedProjects.length + standaloneArchivedTasks.length;
+    toggleBtn.textContent = "Archived (" + totalCount + ") " + (archivedCodingSectionExpanded ? "▴" : "▾");
+    toggleBtn.setAttribute("aria-expanded", archivedCodingSectionExpanded ? "true" : "false");
+
+    if (!archivedCodingSectionExpanded) {
+      container.hidden = true;
+      container.innerHTML = "";
+      return;
+    }
+    container.hidden = false;
+
+    if (!totalCount) {
+      container.innerHTML = '<div class="empty-state">Nothing archived yet.</div>';
+      return;
+    }
+
+    var projectsHtml = archivedProjects
+      .map(function (p) {
+        return archivedCodingProjectCardHtml(p);
+      })
+      .join("");
+
+    var tasksHtml = standaloneArchivedTasks.length
+      ? '<div class="coding-tasks-list">' +
+        standaloneArchivedTasks
+          .map(function (t) {
+            return archivedCodingTaskRowHtml(t, findCodingProject(t.projectId), false);
+          })
+          .join("") +
+        "</div>"
+      : "";
+
+    container.innerHTML = projectsHtml + tasksHtml;
   }
 
   function codingProjectFieldsHtml(project) {
@@ -3368,6 +3719,7 @@
           data.id = generateId();
           data.lastWorkedOn = null;
           data.createdAt = data.updatedAt;
+          data.archived = false;
           state.codingProjects.push(data);
         }
         saveState();
@@ -3471,6 +3823,7 @@
         data.createdAt = data.updatedAt;
         data.lastWorkedOn = null;
         data.isNextAction = false;
+        data.archived = false;
         state.codingTasks.push(data);
       }
       saveState();
@@ -3594,6 +3947,7 @@
           dueDate: row.dueDate,
           notes: "",
           isNextAction: false,
+          archived: false,
           lastWorkedOn: null,
           createdAt: now,
           updatedAt: now,
@@ -3618,6 +3972,13 @@
   function initCodingProjectFilter() {
     document.getElementById("coding-project-status-filter").addEventListener("change", function (e) {
       codingProjectFilter = e.target.value;
+      renderCodingProjects();
+    });
+  }
+
+  function initCodingArchivedToggle() {
+    document.getElementById("coding-archived-toggle").addEventListener("click", function () {
+      archivedCodingSectionExpanded = !archivedCodingSectionExpanded;
       renderCodingProjects();
     });
   }
@@ -3751,6 +4112,7 @@
           githubUrl: "",
           liveUrl: "",
           notes: "",
+          archived: false,
           lastWorkedOn: null,
           createdAt: now,
           updatedAt: now,
@@ -4368,6 +4730,8 @@
     initStudyPasteImporter();
     initCodingProjectFilter();
     initCodingProjectsPasteImporter();
+    initCodingArchivedToggle();
+    initManagementMenus();
     initDataButtons();
     initGlobalTimerControls();
     initAuth();
