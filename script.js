@@ -1442,6 +1442,22 @@
         var remaining = isActive ? activeTimer.remainingMs : plannedMs(item);
         var toggleLabel = running ? "⏸ Pause" : isActive ? "▶ Resume" : "▶ Start";
 
+        // Reuses the item's existing lastPracticed date and single notes
+        // field (no separate practice-log data exists for Guitar) - notes
+        // is a standing per-item note rather than a dated session entry, so
+        // it's labeled "Practice note" (not "Worked on") to avoid implying
+        // it describes the specific session lastPracticed refers to.
+        var practiceHtml;
+        if (item.lastPracticed || item.notes) {
+          practiceHtml =
+            '<div class="guitar-practice-group">' +
+            '<div class="item-card-meta">Last practiced: ' + (item.lastPracticed ? formatDateNice(item.lastPracticed) : "Never") + "</div>" +
+            (item.notes ? '<div class="item-card-meta guitar-practice-notes">Practice note: “' + escapeHtml(item.notes) + '”</div>' : "") +
+            "</div>";
+        } else {
+          practiceHtml = '<p class="hint-text">Not practiced yet</p>';
+        }
+
         return (
           '<div class="item-card" data-id="' + item.id + '" data-guitar-id="' + item.id + '">' +
           '<div class="item-card-header">' +
@@ -1451,9 +1467,9 @@
           "</div>" +
           "</div>" +
           (item.goal ? '<div class="item-card-meta">🎯 ' + escapeHtml(item.goal) + "</div>" : "") +
-          '<div class="item-card-meta">Planned: ' + (Number(item.plannedMinutes) || 0) + " min · Last practiced: " + (item.lastPracticed ? formatDateNice(item.lastPracticed) : "Never") + "</div>" +
+          '<div class="item-card-meta">Planned: ' + (Number(item.plannedMinutes) || 0) + " min</div>" +
           confidenceBarHtml(item.confidence) +
-          (item.notes ? '<div class="item-card-notes">' + escapeHtml(item.notes) + "</div>" : "") +
+          practiceHtml +
           '<div class="timer-display" id="timer-display-' + item.id + '">' + formatTimer(remaining) + "</div>" +
           '<div class="button-row">' +
           '<button class="button button-secondary button-small" data-timer-toggle="' + item.id + '" type="button">' + toggleLabel + "</button>" +

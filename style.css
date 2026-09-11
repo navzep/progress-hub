@@ -334,6 +334,29 @@ body[data-theme="dark"] .tab-button:not(.active) {
   margin-top: 6px;
 }
 
+/* ===================== GUITAR ===================== */
+/* Compact "Last practiced" block - same quiet, self-contained treatment
+   as Coding Projects' "Working on" / Study's focus group, so recent
+   activity reads as one grouped unit rather than loose item-card-meta
+   lines. Scoped to .guitar-practice-* only. */
+.guitar-practice-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg-subtle);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+/* Clamped to 2 lines so a long standing note can't turn the card into a
+   tall block of text - this stays a compact summary, not a log. */
+.guitar-practice-notes {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .badge {
   display: inline-block;
   padding: 2px 8px;
