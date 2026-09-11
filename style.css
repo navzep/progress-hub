@@ -151,8 +151,12 @@ body {
 
 /* ===================== MANAGEMENT MENU (shared) ===================== */
 /* Compact "⋯" overflow menu for card/row actions that don't need to stay
-   directly visible. Generic and module-agnostic by design - Coding
-   Projects is the first user, Study is expected to reuse it as-is. */
+   directly visible. Generic by design, but Coding Projects is its only
+   user - Study keeps its actions plain and always visible instead.
+   .menu-panel's left/top here are just an initial layout guess; JS
+   (positionManagementMenu) overrides them on open with viewport-aware
+   values so the panel can flip left/up when the default placement would
+   run off-screen. */
 .menu-wrap {
   position: relative;
   display: inline-flex;

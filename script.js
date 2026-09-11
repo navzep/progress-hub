@@ -55,6 +55,7 @@
   var expandedCodingProjectIds = {};
   var expandedStudySubjectIds = {};
   var archivedCodingSectionExpanded = false;
+  var archivedStudySectionExpanded = false;
   var openManagementMenu = null;
 
   var activeTimer = {
@@ -909,7 +910,7 @@
     });
 
     state.studyTasks.forEach(function (t) {
-      if (t.status === "Completed") return;
+      if (t.status === "Completed" || isStudyTaskEffectivelyArchived(t)) return;
       var subjectName = studySubjectName(t.subjectId);
       var label = "📚 " + (subjectName ? subjectName + ": " : "") + t.title;
       if (!t.lastWorkedOn) {
@@ -1065,9 +1066,17 @@
       // Deep-linking into a subject always exposes its task list, whether
       // the target is a specific task or the subject card itself - same
       // rule Coding Projects uses. Looks up the subject by the task's own
-      // stable subjectId, never by visible text.
+      // stable subjectId, never by visible text. Under normal operation
+      // an archived task is never the target (Dashboard/Attention already
+      // exclude archived content), but reveal it in the Archived section
+      // rather than silently failing to find it in the active grid.
       var studyTask = state.studyTasks.find(function (t) { return t.id === item.itemId; });
-      if (studyTask) expandedStudySubjectIds[studyTask.subjectId] = true;
+      if (studyTask) {
+        if (isStudyTaskEffectivelyArchived(studyTask)) {
+          archivedStudySectionExpanded = true;
+        }
+        expandedStudySubjectIds[studyTask.subjectId] = true;
+      }
       renderStudy();
       scrollAndHighlight('[data-study-task-id="' + item.itemId + '"]');
     } else if (item.module === "listening") {
@@ -1234,7 +1243,7 @@
   // neither candidate has a lastWorkedOn date at all).
   function computeCurrentStudyFocus() {
     var active = state.studyTasks.filter(function (t) {
-      return t.status === "In Progress" || t.status === "Reviewing";
+      return (t.status === "In Progress" || t.status === "Reviewing") && !isStudyTaskEffectivelyArchived(t);
     });
     if (!active.length) return null;
 
@@ -1318,7 +1327,10 @@
   // there is one, or just opens the Study tab when there isn't.
   function studyStatCardHtml() {
     var focus = computeCurrentStudyFocus();
-    var taskCount = state.studyTasks.length;
+    var activeTasks = state.studyTasks.filter(function (t) {
+      return !isStudyTaskEffectivelyArchived(t);
+    });
+    var taskCount = activeTasks.length;
     var focusHtml;
     var ariaLabel;
     var taskIdAttr = "";
@@ -1343,7 +1355,7 @@
       '<button type="button" class="stat-card" data-color="study" data-study-summary-card' + taskIdAttr + ' aria-label="' + escapeHtml(ariaLabel) + '">' +
       '<div class="stat-card-label">Study</div>' +
       focusHtml +
-      '<div class="stat-card-sub">' + taskCount + " task" + (taskCount === 1 ? "" : "s") + " · " + avgFieldPercent(state.studyTasks, "completion") + " overall</div>" +
+      '<div class="stat-card-sub">' + taskCount + " task" + (taskCount === 1 ? "" : "s") + " · " + avgFieldPercent(activeTasks, "completion") + " overall</div>" +
       "</button>"
     );
   }
@@ -2269,13 +2281,44 @@
       });
   }
 
+  // A task is *effectively* archived - hidden from active views/calcs -
+  // if it was archived directly, or if its parent subject was archived
+  // (archiving a subject never rewrites its tasks' own archived flag, so
+  // this is the only place that needs to know about the parent). Mirrors
+  // isCodingTaskEffectivelyArchived() exactly; restoring a task is always
+  // just flipping its own flag back to false, which can never make it
+  // visible while the parent subject is still archived.
+  function isStudyTaskEffectivelyArchived(task) {
+    if (isArchived(task)) return true;
+    var subject = state.studySubjects.find(function (s) {
+      return s.id === task.subjectId;
+    });
+    return isArchived(subject);
+  }
+
+  function activeStudySubjects() {
+    return state.studySubjects.filter(function (s) {
+      return !isArchived(s);
+    });
+  }
+
+  function archivedStudySubjects() {
+    return state.studySubjects.filter(isArchived);
+  }
+
+  function activeStudySubjectTasks(subjectId) {
+    return studySubjectSortedTasks(subjectId).filter(function (t) {
+      return !isStudyTaskEffectivelyArchived(t);
+    });
+  }
+
   // Task count + overall completion for one subject's Progress group.
   // Percent reuses the exact same "average of each task's completion
   // field" formula the Dashboard Study card already applies across all
   // subjects (see avgFieldPercent) - just scoped to this subject's own
   // tasks instead of the whole study module.
   function computeSubjectTaskStats(subjectId) {
-    var tasks = studySubjectSortedTasks(subjectId);
+    var tasks = activeStudySubjectTasks(subjectId);
     var completed = tasks.filter(function (t) {
       return t.status === "Completed";
     }).length;
@@ -2295,7 +2338,7 @@
   // computeProjectActiveTask()'s selection rule exactly, scoped to one
   // subject instead of one coding project.
   function computeSubjectActiveTask(subjectId) {
-    var active = studySubjectSortedTasks(subjectId).filter(function (t) {
+    var active = activeStudySubjectTasks(subjectId).filter(function (t) {
       return t.status === "In Progress" || t.status === "Reviewing";
     });
     if (!active.length) return null;
@@ -2315,7 +2358,7 @@
   // display computation over the existing dueDate field (studySubjectSortedTasks
   // already orders by dueDate ascending) - no new data, no schema change.
   function computeSubjectNextDueTask(subjectId) {
-    var withDue = studySubjectSortedTasks(subjectId).filter(function (t) {
+    var withDue = activeStudySubjectTasks(subjectId).filter(function (t) {
       return t.dueDate && t.status !== "Completed";
     });
     return withDue.length ? withDue[0] : null;
@@ -2337,13 +2380,147 @@
 
   function renderStudy() {
     var el = document.getElementById("study-subjects-list");
-    if (!state.studySubjects.length) {
+    var activeSubjects = activeStudySubjects();
+
+    if (!activeSubjects.length) {
       el.innerHTML = '<div class="empty-state">No study subjects yet. Add one, or paste tasks above to create subjects automatically.</div>';
-      return;
+    } else {
+      renderActiveStudySubjectsGrid(el, activeSubjects);
     }
 
+    renderArchivedStudySection();
+
+    // Edit/Delete/Archive/Restore/expand-toggle are shared across the
+    // active grid and the Archived section, so they're wired once,
+    // document-wide, after both have rendered.
+    document.querySelectorAll("[data-toggle-study-tasks]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-toggle-study-tasks");
+        expandedStudySubjectIds[id] = !expandedStudySubjectIds[id];
+        renderStudy();
+      });
+    });
+    document.querySelectorAll("[data-edit-subject]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        openStudySubjectModal(btn.getAttribute("data-edit-subject"));
+      });
+    });
+    document.querySelectorAll("[data-delete-subject]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-delete-subject");
+        var subject = state.studySubjects.find(function (s) {
+          return s.id === id;
+        });
+        if (!subject) return;
+        var taskCount = state.studyTasks.filter(function (t) {
+          return t.subjectId === id;
+        }).length;
+        var msg = taskCount
+          ? 'Delete "' + subject.name + '" and its ' + taskCount + " task" + (taskCount === 1 ? "" : "s") + "?"
+          : 'Delete "' + subject.name + '"?';
+        if (!confirm(msg)) return;
+        state.studySubjects = state.studySubjects.filter(function (s) {
+          return s.id !== id;
+        });
+        state.studyTasks = state.studyTasks.filter(function (t) {
+          return t.subjectId !== id;
+        });
+        delete expandedStudySubjectIds[id];
+        saveState();
+        renderAll();
+        showToast("Subject deleted");
+      });
+    });
+    document.querySelectorAll("[data-archive-study-subject]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-archive-study-subject");
+        var subject = state.studySubjects.find(function (s) {
+          return s.id === id;
+        });
+        if (!subject) return;
+        // Archiving never touches child tasks - isStudyTaskEffectivelyArchived()
+        // hides them from active views via this parent flag alone.
+        subject.archived = true;
+        subject.updatedAt = new Date().toISOString();
+        saveState();
+        renderAll();
+        showToast(subject.name + " archived");
+      });
+    });
+    document.querySelectorAll("[data-restore-study-subject]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-restore-study-subject");
+        var subject = state.studySubjects.find(function (s) {
+          return s.id === id;
+        });
+        if (!subject) return;
+        subject.archived = false;
+        subject.updatedAt = new Date().toISOString();
+        saveState();
+        renderAll();
+        showToast(subject.name + " restored");
+      });
+    });
+    document.querySelectorAll("[data-edit-task]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-edit-task");
+        var task = state.studyTasks.find(function (t) {
+          return t.id === id;
+        });
+        if (task) openStudyTaskModal(id, task.subjectId);
+      });
+    });
+    document.querySelectorAll("[data-delete-task]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-delete-task");
+        if (!confirm("Delete this task?")) return;
+        state.studyTasks = state.studyTasks.filter(function (t) {
+          return t.id !== id;
+        });
+        saveState();
+        renderAll();
+        showToast("Task deleted");
+      });
+    });
+    document.querySelectorAll("[data-archive-study-task]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-archive-study-task");
+        var task = state.studyTasks.find(function (t) {
+          return t.id === id;
+        });
+        if (!task) return;
+        // Fields (status, priority, due date, notes, completion,
+        // lastWorkedOn) are left exactly as-is - archiving only ever
+        // toggles this one flag.
+        task.archived = true;
+        task.updatedAt = new Date().toISOString();
+        saveState();
+        renderAll();
+        showToast(task.title + " archived");
+      });
+    });
+    document.querySelectorAll("[data-restore-study-task]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-restore-study-task");
+        var task = state.studyTasks.find(function (t) {
+          return t.id === id;
+        });
+        if (!task) return;
+        // Always safe: if the parent subject is still archived, this task
+        // stays invisible via isStudyTaskEffectivelyArchived()'s parent
+        // check - restoring the subject later reveals it automatically.
+        task.archived = false;
+        task.updatedAt = new Date().toISOString();
+        saveState();
+        renderAll();
+        showToast(task.title + " restored");
+      });
+    });
+  }
+
+  function renderActiveStudySubjectsGrid(el, activeSubjects) {
     var today = todayISO();
-    var sortedSubjects = state.studySubjects.slice().sort(function (a, b) {
+    var sortedSubjects = activeSubjects.slice().sort(function (a, b) {
       return (a.name || "").localeCompare(b.name || "");
     });
 
@@ -2375,7 +2552,7 @@
 
         var tasksBlockHtml = "";
         if (expanded) {
-          var tasks = studySubjectSortedTasks(subj.id);
+          var tasks = activeStudySubjectTasks(subj.id);
           tasksBlockHtml =
             '<div class="study-tasks-list">' +
             (tasks.length
@@ -2401,6 +2578,7 @@
                       "</div>" +
                       '<div class="study-task-actions">' +
                       '<button class="button button-secondary button-small" data-edit-task="' + t.id + '" type="button">Edit</button>' +
+                      '<button class="button button-secondary button-small" data-archive-study-task="' + t.id + '" type="button">Archive</button>' +
                       '<button class="button button-danger button-small" data-delete-task="' + t.id + '" type="button">Delete</button>' +
                       "</div>" +
                       "</div>"
@@ -2426,6 +2604,7 @@
           '<div class="study-subject-actions">' +
           '<button class="button button-primary button-small" data-add-task-to="' + subj.id + '" type="button">+ Task</button>' +
           '<button class="button button-secondary button-small" data-edit-subject="' + subj.id + '" type="button">Rename</button>' +
+          '<button class="button button-secondary button-small" data-archive-study-subject="' + subj.id + '" type="button">Archive</button>' +
           '<button class="button button-danger button-small" data-delete-subject="' + subj.id + '" type="button">Delete</button>' +
           "</div>" +
           tasksBlockHtml +
@@ -2434,47 +2613,9 @@
       })
       .join("");
 
-    el.querySelectorAll("[data-toggle-study-tasks]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var id = btn.getAttribute("data-toggle-study-tasks");
-        expandedStudySubjectIds[id] = !expandedStudySubjectIds[id];
-        renderStudy();
-      });
-    });
     el.querySelectorAll("[data-add-task-to]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         openStudyTaskModal(null, btn.getAttribute("data-add-task-to"));
-      });
-    });
-    el.querySelectorAll("[data-edit-subject]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        openStudySubjectModal(btn.getAttribute("data-edit-subject"));
-      });
-    });
-    el.querySelectorAll("[data-delete-subject]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var id = btn.getAttribute("data-delete-subject");
-        var subject = state.studySubjects.find(function (s) {
-          return s.id === id;
-        });
-        if (!subject) return;
-        var taskCount = state.studyTasks.filter(function (t) {
-          return t.subjectId === id;
-        }).length;
-        var msg = taskCount
-          ? 'Delete "' + subject.name + '" and its ' + taskCount + " task" + (taskCount === 1 ? "" : "s") + "?"
-          : 'Delete "' + subject.name + '"?';
-        if (!confirm(msg)) return;
-        state.studySubjects = state.studySubjects.filter(function (s) {
-          return s.id !== id;
-        });
-        state.studyTasks = state.studyTasks.filter(function (t) {
-          return t.subjectId !== id;
-        });
-        delete expandedStudySubjectIds[id];
-        saveState();
-        renderAll();
-        showToast("Subject deleted");
       });
     });
     el.querySelectorAll("[data-set-study-task-status]").forEach(function (sel) {
@@ -2496,27 +2637,149 @@
         showToast(task.title + " marked " + sel.value);
       });
     });
-    el.querySelectorAll("[data-edit-task]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var id = btn.getAttribute("data-edit-task");
-        var task = state.studyTasks.find(function (t) {
-          return t.id === id;
-        });
-        if (task) openStudyTaskModal(id, task.subjectId);
-      });
+  }
+
+  // One archived task row - reused for a standalone listing (task
+  // archived, parent subject still active - shows which subject it
+  // belongs to) and nested inside an expanded archived subject (no
+  // subject name needed). Restore only shows when the task's own flag is
+  // what's archiving it - a task only swept up via an archived parent has
+  // nothing to restore at the task level; restoring the subject (its own
+  // visible action) is what brings it back. No overflow menu for Study -
+  // plain visible buttons, per the simpler action model.
+  function archivedStudyTaskRowHtml(t, subject, nested) {
+    var contextLine = !nested && subject ? '<div class="study-task-meta">In ' + escapeHtml(subject.name) + "</div>" : "";
+    var showRestore = isArchived(t);
+    return (
+      '<div class="study-task-row' + (t.status === "Completed" ? " completed" : "") + ' coding-archived-card" data-id="' + t.id + '" data-study-task-id="' + t.id + '">' +
+      '<div class="study-task-main">' +
+      '<div class="study-task-title">' + escapeHtml(t.title) + "</div>" +
+      '<div class="study-task-badges">' +
+      '<span class="badge ' + taskStatusBadgeClass(t.status) + '">' + escapeHtml(t.status) + "</span>" +
+      '<span class="badge ' + taskPriorityBadgeClass(t.priority) + '">' + escapeHtml(t.priority) + "</span>" +
+      "</div>" +
+      '<div class="study-task-meta">' +
+      escapeHtml(t.type || "Other") +
+      (t.dueDate ? " · Due " + formatDateNice(t.dueDate) : "") +
+      " · Last worked on: " + (t.lastWorkedOn ? formatDateNice(t.lastWorkedOn) : "Never") +
+      "</div>" +
+      contextLine +
+      (t.notes ? '<div class="item-card-notes">' + escapeHtml(t.notes) + "</div>" : "") +
+      "</div>" +
+      '<div class="study-task-actions">' +
+      '<button class="button button-secondary button-small" data-edit-task="' + t.id + '" type="button">Edit</button>' +
+      (showRestore ? '<button class="button button-secondary button-small" data-restore-study-task="' + t.id + '" type="button">Restore</button>' : "") +
+      '<button class="button button-danger button-small" data-delete-task="' + t.id + '" type="button">Delete</button>' +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  // Archived subject card: compact by design (no progress bar / focus
+  // group - a Subject has no status/priority of its own to show anyway)
+  // but still expandable to inspect its full retained task history,
+  // including tasks that were never individually archived (they're only
+  // hidden via this parent).
+  function archivedStudySubjectCardHtml(subj) {
+    var allTasks = studySubjectSortedTasks(subj.id);
+    var completedCount = allTasks.filter(function (t) {
+      return t.status === "Completed";
+    }).length;
+    var expanded = !!expandedStudySubjectIds[subj.id];
+
+    var tasksBlockHtml = "";
+    if (expanded) {
+      tasksBlockHtml =
+        '<div class="study-tasks-list">' +
+        (allTasks.length
+          ? allTasks
+              .map(function (t) {
+                return archivedStudyTaskRowHtml(t, subj, true);
+              })
+              .join("")
+          : '<div class="empty-state">No tasks yet.</div>') +
+        "</div>";
+    }
+
+    var toggleLabel = "Tasks (" + allTasks.length + ") " + (expanded ? "▴" : "▾");
+
+    return (
+      '<div class="item-card study-subject-card coding-archived-card" data-id="' + subj.id + '" data-study-subject-id="' + subj.id + '">' +
+      '<div class="item-card-header">' +
+      '<div>' +
+      '<div class="item-card-title">' + escapeHtml(subj.name) + "</div>" +
+      '<div class="item-card-meta">' + (allTasks.length ? completedCount + " / " + allTasks.length + " tasks complete" : "No tasks") + "</div>" +
+      "</div>" +
+      "</div>" +
+      '<button class="coding-tasks-toggle study-tasks-toggle" data-toggle-study-tasks="' + subj.id + '" type="button" aria-expanded="' + (expanded ? "true" : "false") + '">' + toggleLabel + "</button>" +
+      '<div class="study-subject-actions">' +
+      '<button class="button button-secondary button-small" data-edit-subject="' + subj.id + '" type="button">Rename</button>' +
+      '<button class="button button-secondary button-small" data-restore-study-subject="' + subj.id + '" type="button">Restore</button>' +
+      '<button class="button button-danger button-small" data-delete-subject="' + subj.id + '" type="button">Delete</button>' +
+      "</div>" +
+      tasksBlockHtml +
+      "</div>"
+    );
+  }
+
+  function renderArchivedStudySection() {
+    var toggleBtn = document.getElementById("study-archived-toggle");
+    var container = document.getElementById("study-archived-section");
+    if (!toggleBtn || !container) return;
+
+    var archivedSubjects = archivedStudySubjects().slice().sort(function (a, b) {
+      return (a.name || "").localeCompare(b.name || "");
     });
-    el.querySelectorAll("[data-delete-task]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var id = btn.getAttribute("data-delete-task");
-        if (!confirm("Delete this task?")) return;
-        state.studyTasks = state.studyTasks.filter(function (t) {
-          return t.id !== id;
+    // Archived tasks whose subject is still active - a task archived
+    // inside an archived subject is reached by expanding that subject
+    // instead, so it isn't duplicated here.
+    var standaloneArchivedTasks = state.studyTasks
+      .filter(function (t) {
+        var subject = state.studySubjects.find(function (s) {
+          return s.id === t.subjectId;
         });
-        saveState();
-        renderAll();
-        showToast("Task deleted");
+        return isArchived(t) && !isArchived(subject);
+      })
+      .sort(function (a, b) {
+        return (b.updatedAt || "").localeCompare(a.updatedAt || "");
       });
-    });
+
+    var totalCount = archivedSubjects.length + standaloneArchivedTasks.length;
+    toggleBtn.textContent = "Archived (" + totalCount + ") " + (archivedStudySectionExpanded ? "▴" : "▾");
+    toggleBtn.setAttribute("aria-expanded", archivedStudySectionExpanded ? "true" : "false");
+
+    if (!archivedStudySectionExpanded) {
+      container.hidden = true;
+      container.innerHTML = "";
+      return;
+    }
+    container.hidden = false;
+
+    if (!totalCount) {
+      container.innerHTML = '<div class="empty-state">Nothing archived yet.</div>';
+      return;
+    }
+
+    var subjectsHtml = archivedSubjects
+      .map(function (subj) {
+        return archivedStudySubjectCardHtml(subj);
+      })
+      .join("");
+
+    var tasksHtml = standaloneArchivedTasks.length
+      ? '<div class="study-tasks-list">' +
+        standaloneArchivedTasks
+          .map(function (t) {
+            var subject = state.studySubjects.find(function (s) {
+              return s.id === t.subjectId;
+            });
+            return archivedStudyTaskRowHtml(t, subject, false);
+          })
+          .join("") +
+        "</div>"
+      : "";
+
+    container.innerHTML = subjectsHtml + tasksHtml;
   }
 
   function studySubjectFieldsHtml(subject) {
@@ -2542,7 +2805,7 @@
           subject.name = name;
           subject.updatedAt = now;
         } else {
-          state.studySubjects.push({ id: generateId(), name: name, createdAt: now, updatedAt: now });
+          state.studySubjects.push({ id: generateId(), name: name, archived: false, createdAt: now, updatedAt: now });
         }
         saveState();
         renderAll();
@@ -2552,8 +2815,16 @@
     );
   }
 
+  // Excludes archived subjects from the "assign to" dropdown - moving an
+  // active task into one would immediately hide it via the parent check
+  // in isStudyTaskEffectivelyArchived(). The task's *current* subject
+  // stays listed even if archived, so editing an already-archived task
+  // still shows its real assignment instead of silently dropping it.
   function studySubjectOptionsHtml(selectedId) {
     return state.studySubjects
+      .filter(function (s) {
+        return !isArchived(s) || s.id === selectedId;
+      })
       .slice()
       .sort(function (a, b) {
         return (a.name || "").localeCompare(b.name || "");
@@ -2654,6 +2925,7 @@
           data.id = generateId();
           data.createdAt = data.updatedAt;
           data.lastWorkedOn = null;
+          data.archived = false;
           state.studyTasks.push(data);
         }
         saveState();
@@ -2739,6 +3011,13 @@
     return { rows: rows, invalidStatusCount: invalidStatusCount, invalidPriorityCount: invalidPriorityCount };
   }
 
+  function initStudyArchivedToggle() {
+    document.getElementById("study-archived-toggle").addEventListener("click", function () {
+      archivedStudySectionExpanded = !archivedStudySectionExpanded;
+      renderStudy();
+    });
+  }
+
   function initStudyPasteImporter() {
     document.getElementById("parse-study-btn").addEventListener("click", function () {
       var textarea = document.getElementById("study-paste-input");
@@ -2750,8 +3029,12 @@
 
       var now = new Date().toISOString();
 
+      // Name-matching only searches active subjects - a pasted name that
+      // matches only an archived subject creates a fresh active subject
+      // with the same name instead of silently attaching new tasks to
+      // hidden content (and never auto-restores the archived one).
       var subjectsByName = {};
-      state.studySubjects.forEach(function (s) {
+      activeStudySubjects().forEach(function (s) {
         subjectsByName[s.name.trim().toLowerCase()] = s;
       });
 
@@ -2768,7 +3051,7 @@
         var subjectKey = row.subject.trim().toLowerCase();
         var subject = subjectsByName[subjectKey];
         if (!subject) {
-          subject = { id: generateId(), name: row.subject, createdAt: now, updatedAt: now };
+          subject = { id: generateId(), name: row.subject, archived: false, createdAt: now, updatedAt: now };
           state.studySubjects.push(subject);
           subjectsByName[subjectKey] = subject;
           subjectsCreated++;
@@ -2791,6 +3074,7 @@
           dueDate: row.dueDate,
           completion: row.status === "Completed" ? 100 : 0,
           notes: "",
+          archived: false,
           lastWorkedOn: null,
           createdAt: now,
           updatedAt: now,
@@ -3073,7 +3357,8 @@
 
   // Compact "⋯" trigger + popover used for a card/row's less-frequent
   // actions. Generic by design - itemsHtml is just a list of .menu-item
-  // buttons, so any module can reuse this (Study is expected to next).
+  // buttons - but Coding Projects is its only user: Study keeps its
+  // actions plain and always visible instead.
   function managementMenuHtml(itemsHtml, ariaLabel) {
     return (
       '<div class="menu-wrap">' +
@@ -3086,9 +3371,50 @@
   function closeOpenManagementMenu() {
     if (!openManagementMenu) return;
     openManagementMenu.hidden = true;
+    openManagementMenu.style.left = "";
+    openManagementMenu.style.right = "";
+    openManagementMenu.style.top = "";
+    openManagementMenu.style.bottom = "";
     var trigger = openManagementMenu.previousElementSibling;
     if (trigger) trigger.setAttribute("aria-expanded", "false");
     openManagementMenu = null;
+  }
+
+  // Positions an already-visible menu panel (absolutely positioned inside
+  // its .menu-wrap, which is the offsetParent) so it stays fully on-screen
+  // regardless of where its trigger sits. Computed fresh from
+  // getBoundingClientRect() on every open rather than via breakpoint CSS,
+  // since the trigger's actual position (wrap/flex-wrap can put it
+  // anywhere) is what determines whether it needs to flip, not viewport
+  // width alone.
+  function positionManagementMenu(wrap, panel) {
+    var margin = 8;
+    var wrapRect = wrap.getBoundingClientRect();
+    var panelWidth = panel.offsetWidth;
+    var panelHeight = panel.offsetHeight;
+    var viewportWidth = document.documentElement.clientWidth;
+    var viewportHeight = document.documentElement.clientHeight;
+
+    // Horizontal: default is right-aligned to the trigger. If that would
+    // push the panel past the left edge, flip to left-aligned instead;
+    // then clamp so it can never sit past either edge.
+    var left = wrapRect.right - panelWidth;
+    if (left < margin) left = wrapRect.left;
+    if (left + panelWidth > viewportWidth - margin) left = viewportWidth - margin - panelWidth;
+    if (left < margin) left = margin;
+
+    // Vertical: default is below the trigger. If there isn't room, open
+    // upward instead.
+    var top = wrapRect.bottom + 4;
+    if (top + panelHeight > viewportHeight - margin) {
+      var above = wrapRect.top - 4 - panelHeight;
+      top = above < margin ? margin : above;
+    }
+
+    panel.style.right = "auto";
+    panel.style.bottom = "auto";
+    panel.style.left = (left - wrapRect.left) + "px";
+    panel.style.top = (top - wrapRect.top) + "px";
   }
 
   // Document-level close-on-outside-click / close-on-Escape, registered
@@ -3119,6 +3445,7 @@
         closeOpenManagementMenu();
         if (!wasOpen) {
           panel.hidden = false;
+          positionManagementMenu(trigger.parentElement, panel);
           trigger.setAttribute("aria-expanded", "true");
           openManagementMenu = panel;
         }
@@ -4728,6 +5055,7 @@
     initListeningFilter();
     initListeningPasteImporter();
     initStudyPasteImporter();
+    initStudyArchivedToggle();
     initCodingProjectFilter();
     initCodingProjectsPasteImporter();
     initCodingArchivedToggle();
