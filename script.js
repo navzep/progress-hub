@@ -1174,14 +1174,65 @@
     return { primary: sorted[0], extraCount: sorted.length - 1 };
   }
 
+  // Picks the guitar item practiced most recently, if any. Guitar has no
+  // active/status concept to filter by first (unlike Study/Coding tasks),
+  // so this is just recency - deterministic id tie-break keeps it stable
+  // between renders, same convention as computeCurrentStudyFocus().
+  function computeCurrentGuitarFocus() {
+    var practiced = state.guitarItems.filter(function (g) {
+      return !!g.lastPracticed;
+    });
+    if (!practiced.length) return null;
+    var sorted = practiced.slice().sort(function (a, b) {
+      if (a.lastPracticed !== b.lastPracticed) return a.lastPracticed < b.lastPracticed ? 1 : -1;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+    return sorted[0];
+  }
+
   // Builds a plain (label/value/sub) grid tile — the shape shared by
-  // Guitar, Training, Race Pipeline, Next Confirmed Race, and Listening.
+  // Training, Race Pipeline, Next Confirmed Race, and Listening.
   function simpleStatCardHtml(c) {
     return (
       '<button type="button" class="stat-card" data-goto="' + c.tab + '" data-color="' + c.color + '">' +
       '<div class="stat-card-label">' + escapeHtml(c.label) + "</div>" +
       '<div class="stat-card-value">' + escapeHtml(c.value) + "</div>" +
       '<div class="stat-card-sub">' + escapeHtml(c.sub) + "</div>" +
+      "</button>"
+    );
+  }
+
+  // Builds the Guitar grid tile: the most recently practiced item's
+  // lastPracticed/notes (see computeCurrentGuitarFocus() and the matching
+  // block in renderGuitar()) as primary content, item count/avg confidence
+  // demoted to a secondary line. Same wording/semantics as the Guitar
+  // module card - "Practice note" not "Worked on", date-only when there's
+  // no note, "Not practiced yet" when there's neither. Same
+  // whole-tile-is-one-button click behavior as Study/Coding.
+  function guitarStatCardHtml() {
+    var focus = computeCurrentGuitarFocus();
+    var itemCount = state.guitarItems.length;
+    var focusHtml;
+    var ariaLabel;
+    var itemIdAttr = "";
+
+    if (focus) {
+      focusHtml =
+        '<div class="stat-card-focus-title">' + escapeHtml(focus.title) + "</div>" +
+        '<div class="stat-card-focus-meta">Last practiced: ' + formatDateNice(focus.lastPracticed) + "</div>" +
+        (focus.notes ? '<div class="stat-card-focus-note">Practice note: “' + escapeHtml(focus.notes) + '”</div>' : "");
+      ariaLabel = "Open " + focus.title + " in Guitar";
+      itemIdAttr = ' data-guitar-focus-item-id="' + focus.id + '"';
+    } else {
+      focusHtml = '<div class="stat-card-focus-empty">Not practiced yet</div>';
+      ariaLabel = "Open Guitar";
+    }
+
+    return (
+      '<button type="button" class="stat-card" data-color="guitar" data-guitar-summary-card' + itemIdAttr + ' aria-label="' + escapeHtml(ariaLabel) + '">' +
+      '<div class="stat-card-label">Guitar Items</div>' +
+      focusHtml +
+      '<div class="stat-card-sub">' + itemCount + " item" + (itemCount === 1 ? "" : "s") + " · Avg confidence " + avgFieldPercent(state.guitarItems) + "</div>" +
       "</button>"
     );
   }
@@ -1327,13 +1378,6 @@
 
     var cards = [
       {
-        tab: "guitar",
-        color: "guitar",
-        label: "Guitar Items",
-        value: String(state.guitarItems.length),
-        sub: "Avg confidence " + avgFieldPercent(state.guitarItems),
-      },
-      {
         tab: "training",
         color: "training",
         label: "Training This Week",
@@ -1363,16 +1407,16 @@
       },
     ];
 
-    // Study and Coding Projects render as richer tiles (active-item focus)
-    // rather than the plain label/value/sub shape, but stay in the same
-    // grid alongside everything else — same position they held before.
+    // Guitar, Study, and Coding Projects render as richer tiles (active-item
+    // focus) rather than the plain label/value/sub shape, but stay in the
+    // same grid alongside everything else — same position they held before.
     el.innerHTML =
-      simpleStatCardHtml(cards[0]) + // Guitar
-      simpleStatCardHtml(cards[1]) + // Training This Week
-      simpleStatCardHtml(cards[2]) + // Race Pipeline
-      simpleStatCardHtml(cards[3]) + // Next Confirmed Race
+      guitarStatCardHtml() +
+      simpleStatCardHtml(cards[0]) + // Training This Week
+      simpleStatCardHtml(cards[1]) + // Race Pipeline
+      simpleStatCardHtml(cards[2]) + // Next Confirmed Race
       studyStatCardHtml() +
-      simpleStatCardHtml(cards[4]) + // Listening
+      simpleStatCardHtml(cards[3]) + // Listening
       codingProjectsStatCardHtml();
 
     el.querySelectorAll("[data-goto]").forEach(function (btn) {
@@ -1380,6 +1424,18 @@
         setActiveTab(btn.getAttribute("data-goto"));
       });
     });
+
+    var guitarCardBtn = el.querySelector("[data-guitar-summary-card]");
+    if (guitarCardBtn) {
+      guitarCardBtn.addEventListener("click", function () {
+        var itemId = guitarCardBtn.getAttribute("data-guitar-focus-item-id");
+        if (itemId) {
+          navigateToItem({ module: "guitar", itemId: itemId });
+        } else {
+          setActiveTab("guitar");
+        }
+      });
+    }
 
     var studyCardBtn = el.querySelector("[data-study-summary-card]");
     if (studyCardBtn) {

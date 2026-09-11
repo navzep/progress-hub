@@ -881,7 +881,8 @@ button.session-row:focus-visible {
   margin-top: 2px;
 }
 
-.stat-card-focus-next-action {
+.stat-card-focus-next-action,
+.stat-card-focus-note {
   font-size: 0.75rem;
   color: var(--text-muted);
   margin-top: 6px;
