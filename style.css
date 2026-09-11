@@ -372,6 +372,31 @@ body[data-theme="dark"] .tab-button:not(.active) {
 .badge-done { background: rgba(47, 158, 88, 0.15); color: var(--success); }
 .badge-next-action { background: rgba(217, 119, 6, 0.18); color: #d97706; font-size: 0.65rem; padding: 1px 6px; }
 
+/* Inline status control: a real <select> styled to read as a status
+   badge (Coding and Study task rows) so status can change without
+   opening Edit. Longhand background-image only (never the `background`
+   shorthand) so this layers on top of whichever .badge-* color rule is
+   applied without erasing that rule's background-color. */
+.badge-select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  padding-right: 18px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath d='M1 2.5l3 3 3-3' stroke='%23888' stroke-width='1.3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 5px center;
+  min-height: var(--tap-min);
+  min-width: 44px;
+}
+
+.badge-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .rating-stars {
   color: #d97706;
   font-size: 0.95rem;
@@ -874,19 +899,6 @@ button.session-row:focus-visible {
 }
 
 /* ===================== STUDY ===================== */
-.study-subject-card {
-  margin-bottom: 12px;
-}
-
-.study-subject-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 4px;
-}
-
 .study-tasks-list,
 .coding-tasks-list {
   display: flex;
@@ -1008,26 +1020,31 @@ button.session-row:focus-visible {
   }
 }
 
-/* ===================== CODING PROJECT CARD POLISH ===================== */
-/* Scoped to Coding Projects only via #coding-projects-list / .coding-*
+/* ===================== PROJECT/SUBJECT CARD POLISH ===================== */
+/* Shared expand/collapse + task-row density rules for Coding Projects and
+   Study - the two "parent card with a nested task list" modules. Scoped
+   via #coding-projects-list/#study-subjects-list and .coding-*/.study-*
    classes - does not touch the shared .card-grid / .item-card-actions
    rules that Guitar, Races, and Listening also use. */
 
 /* Prevents CSS Grid's default row-stretch from forcing every collapsed
    card in a row up to the height of the tallest (expanded) one. */
-#coding-projects-list.card-grid {
+#coding-projects-list.card-grid,
+#study-subjects-list.card-grid {
   align-items: start;
 }
 
 /* A little more breathing room between top-level sections than the base
    .item-card gap (8px), while each group below uses a tighter internal
    gap so related lines read as one unit. */
-.coding-project-card {
+.coding-project-card,
+.study-subject-card {
   gap: 14px;
 }
 
 .coding-project-progress-group,
-.coding-project-details-group {
+.coding-project-details-group,
+.study-subject-progress-group {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1035,7 +1052,8 @@ button.session-row:focus-visible {
 
 /* "Working on" / "Next" surfaced as one quiet, self-contained block
    rather than two more undifferentiated item-card-meta lines. */
-.coding-project-focus-group {
+.coding-project-focus-group,
+.study-subject-focus-group {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -1046,7 +1064,8 @@ button.session-row:focus-visible {
 
 /* Compact disclosure control ("Tasks (3) ▾") standing on its own line,
    separate from the primary action buttons below it. */
-.coding-tasks-toggle {
+.coding-tasks-toggle,
+.study-tasks-toggle {
   align-self: flex-start;
   background: none;
   border: none;
@@ -1060,17 +1079,20 @@ button.session-row:focus-visible {
   align-items: center;
 }
 
-.coding-tasks-toggle:hover {
+.coding-tasks-toggle:hover,
+.study-tasks-toggle:hover {
   text-decoration: underline;
 }
 
-.coding-tasks-toggle:focus-visible {
+.coding-tasks-toggle:focus-visible,
+.study-tasks-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 4px;
 }
 
-.coding-project-actions {
+.coding-project-actions,
+.study-subject-actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
@@ -1079,44 +1101,52 @@ button.session-row:focus-visible {
 
 /* Nested/indented feel for the task list without it reading as another
    full item-card at the same visual weight as its parent. */
-.coding-tasks-list {
+.coding-tasks-list,
+.study-tasks-list {
   margin-left: 4px;
   padding-left: 12px;
   border-left: 2px solid var(--border);
   gap: 6px;
 }
 
-.coding-task-row {
+.coding-task-row,
+.study-task-row {
   padding: 8px 10px;
 }
 
-/* Badges and secondary meta (due date / last worked on) share one line
-   instead of stacking, so a wide expanded card's task rows stay compact
-   and use the extra horizontal room rather than just going taller. */
-.coding-task-badges {
+/* Badges and secondary meta (due date / last worked on / type) share one
+   line instead of stacking, so a wide expanded card's task rows stay
+   compact and use the extra horizontal room rather than just going
+   taller. */
+.coding-task-badges,
+.study-task-badges {
   display: inline-flex;
+  align-items: center;
   gap: 6px;
   margin-top: 4px;
   vertical-align: middle;
 }
 
-.coding-task-meta {
+.coding-task-meta,
+.study-task-meta {
   display: inline-block;
   margin-top: 4px;
   margin-left: 8px;
   vertical-align: middle;
 }
 
-.coding-task-actions {
+.coding-task-actions,
+.study-task-actions {
   gap: 6px;
   margin-top: 8px;
 }
 
-/* Expanded project cards take the full row width to read as a workspace
-   for large task lists instead of a long narrow column. Collapsed cards
-   are untouched and keep flowing in the normal grid at their compact
-   width. align-items:start above already stops this from stretching
-   row-mates to match height. */
-.coding-project-card.is-expanded {
+/* Expanded project/subject cards take the full row width to read as a
+   workspace for large task lists instead of a long narrow column.
+   Collapsed cards are untouched and keep flowing in the normal grid at
+   their compact width. align-items:start above already stops this from
+   stretching row-mates to match height. */
+.coding-project-card.is-expanded,
+.study-subject-card.is-expanded {
   grid-column: 1 / -1;
 }

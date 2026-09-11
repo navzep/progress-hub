@@ -53,6 +53,7 @@
   var listeningFilter = "All";
   var codingProjectFilter = "All";
   var expandedCodingProjectIds = {};
+  var expandedStudySubjectIds = {};
 
   var activeTimer = {
     itemId: null,
@@ -996,8 +997,12 @@
       renderRaces();
       scrollAndHighlight('[data-race-id="' + item.itemId + '"]');
     } else if (item.module === "study") {
-      // Subjects always render fully expanded (no collapse state exists),
-      // so the target task is already in the DOM once renderStudy() runs.
+      // Deep-linking into a subject always exposes its task list, whether
+      // the target is a specific task or the subject card itself - same
+      // rule Coding Projects uses. Looks up the subject by the task's own
+      // stable subjectId, never by visible text.
+      var studyTask = state.studyTasks.find(function (t) { return t.id === item.itemId; });
+      if (studyTask) expandedStudySubjectIds[studyTask.subjectId] = true;
       renderStudy();
       scrollAndHighlight('[data-study-task-id="' + item.itemId + '"]');
     } else if (item.module === "listening") {
@@ -2117,12 +2122,70 @@
       });
   }
 
+  // Task count + overall completion for one subject's Progress group.
+  // Percent reuses the exact same "average of each task's completion
+  // field" formula the Dashboard Study card already applies across all
+  // subjects (see avgFieldPercent) - just scoped to this subject's own
+  // tasks instead of the whole study module.
+  function computeSubjectTaskStats(subjectId) {
+    var tasks = studySubjectSortedTasks(subjectId);
+    var completed = tasks.filter(function (t) {
+      return t.status === "Completed";
+    }).length;
+    var percent = tasks.length
+      ? Math.round(
+          tasks.reduce(function (acc, t) {
+            return acc + (Number(t.completion) || 0);
+          }, 0) / tasks.length
+        )
+      : 0;
+    return { total: tasks.length, completed: completed, percent: percent };
+  }
+
+  // Active task = In Progress or Reviewing, preferring most-recent
+  // lastWorkedOn, falling back to High priority, then a deterministic id
+  // comparison so ties never reorder between renders. Mirrors
+  // computeProjectActiveTask()'s selection rule exactly, scoped to one
+  // subject instead of one coding project.
+  function computeSubjectActiveTask(subjectId) {
+    var active = studySubjectSortedTasks(subjectId).filter(function (t) {
+      return t.status === "In Progress" || t.status === "Reviewing";
+    });
+    if (!active.length) return null;
+    var priorityRank = { High: 3, Medium: 2, Low: 1 };
+    var sorted = active.slice().sort(function (a, b) {
+      var aDate = a.lastWorkedOn || "";
+      var bDate = b.lastWorkedOn || "";
+      if (aDate !== bDate) return aDate < bDate ? 1 : -1;
+      var pr = (priorityRank[b.priority] || 0) - (priorityRank[a.priority] || 0);
+      if (pr !== 0) return pr;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+    return sorted[0];
+  }
+
+  // Nearest not-yet-completed due date in the subject, if any. Purely a
+  // display computation over the existing dueDate field (studySubjectSortedTasks
+  // already orders by dueDate ascending) - no new data, no schema change.
+  function computeSubjectNextDueTask(subjectId) {
+    var withDue = studySubjectSortedTasks(subjectId).filter(function (t) {
+      return t.dueDate && t.status !== "Completed";
+    });
+    return withDue.length ? withDue[0] : null;
+  }
+
   function taskStatusBadgeClass(status) {
     return "badge-" + String(status).toLowerCase().replace(/\s+/g, "-");
   }
 
   function taskPriorityBadgeClass(priority) {
     return "badge-priority-" + String(priority).toLowerCase();
+  }
+
+  function studyTaskStatusOptionsHtml(selected) {
+    return TASK_STATUSES.map(function (s) {
+      return '<option value="' + s + '"' + (s === selected ? " selected" : "") + ">" + s + "</option>";
+    }).join("");
   }
 
   function renderStudy() {
@@ -2139,60 +2202,98 @@
 
     el.innerHTML = sortedSubjects
       .map(function (subj) {
-        var tasks = studySubjectSortedTasks(subj.id);
-        var completedCount = tasks.filter(function (t) {
-          return t.status === "Completed";
-        }).length;
+        var stats = computeSubjectTaskStats(subj.id);
+        var activeTask = computeSubjectActiveTask(subj.id);
+        var nextDueTask = computeSubjectNextDueTask(subj.id);
+        var expanded = !!expandedStudySubjectIds[subj.id];
 
-        var tasksHtml = tasks.length
-          ? '<div class="study-tasks-list">' +
-            tasks
-              .map(function (t) {
-                var overdue = !!(t.dueDate && t.dueDate < today && t.status !== "Completed");
-                return (
-                  '<div class="study-task-row' + (t.status === "Completed" ? " completed" : "") + '" data-id="' + t.id + '" data-study-task-id="' + t.id + '">' +
-                  '<input type="checkbox" data-toggle-task="' + t.id + '" ' + (t.status === "Completed" ? "checked" : "") + ">" +
-                  '<div class="study-task-main">' +
-                  '<div class="study-task-title">' + escapeHtml(t.title) + "</div>" +
-                  '<div class="study-task-meta' + (overdue ? " overdue" : "") + '">' +
-                  escapeHtml(t.type || "Other") +
-                  (t.dueDate ? " · Due " + formatDateNice(t.dueDate) : "") +
-                  " · " + (Number(t.completion) || 0) + "% complete" +
-                  "</div>" +
-                  (t.notes ? '<div class="item-card-notes">' + escapeHtml(t.notes) + "</div>" : "") +
-                  "</div>" +
-                  '<span class="badge ' + taskStatusBadgeClass(t.status) + '">' + escapeHtml(t.status) + "</span>" +
-                  '<span class="badge ' + taskPriorityBadgeClass(t.priority) + '">' + escapeHtml(t.priority) + "</span>" +
-                  '<div class="study-task-actions">' +
-                  '<button class="button button-secondary button-small" data-edit-task="' + t.id + '" type="button">Edit</button>' +
-                  '<button class="button button-danger button-small" data-delete-task="' + t.id + '" type="button">Delete</button>' +
-                  "</div>" +
-                  "</div>"
-                );
-              })
-              .join("") +
-            "</div>"
-          : '<div class="empty-state">No tasks yet.</div>';
+        var progressGroupHtml =
+          '<div class="study-subject-progress-group">' +
+          confidenceBarHtml(stats.percent, "Progress") +
+          '<div class="item-card-meta">' + (stats.total ? stats.completed + " / " + stats.total + " tasks complete" : "No tasks yet") + "</div>" +
+          "</div>";
+
+        // If the active task is also the nearest due task, show it once
+        // ("Working on" takes precedence) rather than repeating its title -
+        // same rule Coding Projects uses for Working on / Next.
+        var showNextDueLine = nextDueTask && (!activeTask || activeTask.id !== nextDueTask.id);
+        var focusGroupHtml = "";
+        if (activeTask || showNextDueLine) {
+          focusGroupHtml =
+            '<div class="study-subject-focus-group">' +
+            (activeTask ? '<div class="item-card-meta">▶ Working on: ' + escapeHtml(activeTask.title) + "</div>" : "") +
+            (showNextDueLine ? '<div class="item-card-meta">➡ Next due: ' + escapeHtml(nextDueTask.title) + " (" + formatDateNice(nextDueTask.dueDate) + ")</div>" : "") +
+            "</div>";
+        }
+
+        var tasksBlockHtml = "";
+        if (expanded) {
+          var tasks = studySubjectSortedTasks(subj.id);
+          tasksBlockHtml =
+            '<div class="study-tasks-list">' +
+            (tasks.length
+              ? tasks
+                  .map(function (t) {
+                    var overdue = !!(t.dueDate && t.dueDate < today && t.status !== "Completed");
+                    return (
+                      '<div class="study-task-row' + (t.status === "Completed" ? " completed" : "") + '" data-id="' + t.id + '" data-study-task-id="' + t.id + '">' +
+                      '<div class="study-task-main">' +
+                      '<div class="study-task-title">' + escapeHtml(t.title) + "</div>" +
+                      '<div class="study-task-badges">' +
+                      '<select class="badge badge-select ' + taskStatusBadgeClass(t.status) + '" data-set-study-task-status="' + t.id + '" aria-label="Status for ' + escapeHtml(t.title) + '">' +
+                      studyTaskStatusOptionsHtml(t.status) +
+                      "</select>" +
+                      '<span class="badge ' + taskPriorityBadgeClass(t.priority) + '">' + escapeHtml(t.priority) + "</span>" +
+                      "</div>" +
+                      '<div class="study-task-meta' + (overdue ? " overdue" : "") + '">' +
+                      escapeHtml(t.type || "Other") +
+                      (t.dueDate ? " · Due " + formatDateNice(t.dueDate) : "") +
+                      " · Last worked on: " + (t.lastWorkedOn ? formatDateNice(t.lastWorkedOn) : "Never") +
+                      "</div>" +
+                      (t.notes ? '<div class="item-card-notes">' + escapeHtml(t.notes) + "</div>" : "") +
+                      "</div>" +
+                      '<div class="study-task-actions">' +
+                      '<button class="button button-secondary button-small" data-edit-task="' + t.id + '" type="button">Edit</button>' +
+                      '<button class="button button-danger button-small" data-delete-task="' + t.id + '" type="button">Delete</button>' +
+                      "</div>" +
+                      "</div>"
+                    );
+                  })
+                  .join("")
+              : '<div class="empty-state">No tasks yet.</div>') +
+            "</div>";
+        }
+
+        var toggleLabel = "Tasks (" + stats.total + ") " + (expanded ? "▴" : "▾");
 
         return (
-          '<div class="card study-subject-card" data-subject-id="' + subj.id + '" data-study-subject-id="' + subj.id + '">' +
-          '<div class="study-subject-header">' +
-          "<div>" +
-          '<h3 class="card-title">' + escapeHtml(subj.name) + "</h3>" +
-          '<div class="item-card-meta">' + completedCount + " / " + tasks.length + " tasks complete</div>" +
+          '<div class="item-card study-subject-card' + (expanded ? " is-expanded" : "") + '" data-id="' + subj.id + '" data-study-subject-id="' + subj.id + '">' +
+          '<div class="item-card-header">' +
+          '<div>' +
+          '<div class="item-card-title">' + escapeHtml(subj.name) + "</div>" +
           "</div>" +
-          '<div class="item-card-actions">' +
-          '<button class="button button-secondary button-small" data-add-task-to="' + subj.id + '" type="button">+ Task</button>' +
+          "</div>" +
+          progressGroupHtml +
+          focusGroupHtml +
+          '<button class="coding-tasks-toggle study-tasks-toggle" data-toggle-study-tasks="' + subj.id + '" type="button" aria-expanded="' + (expanded ? "true" : "false") + '">' + toggleLabel + "</button>" +
+          '<div class="study-subject-actions">' +
+          '<button class="button button-primary button-small" data-add-task-to="' + subj.id + '" type="button">+ Task</button>' +
           '<button class="button button-secondary button-small" data-edit-subject="' + subj.id + '" type="button">Rename</button>' +
           '<button class="button button-danger button-small" data-delete-subject="' + subj.id + '" type="button">Delete</button>' +
           "</div>" +
-          "</div>" +
-          tasksHtml +
+          tasksBlockHtml +
           "</div>"
         );
       })
       .join("");
 
+    el.querySelectorAll("[data-toggle-study-tasks]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-toggle-study-tasks");
+        expandedStudySubjectIds[id] = !expandedStudySubjectIds[id];
+        renderStudy();
+      });
+    });
     el.querySelectorAll("[data-add-task-to]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         openStudyTaskModal(null, btn.getAttribute("data-add-task-to"));
@@ -2223,24 +2324,29 @@
         state.studyTasks = state.studyTasks.filter(function (t) {
           return t.subjectId !== id;
         });
+        delete expandedStudySubjectIds[id];
         saveState();
         renderAll();
         showToast("Subject deleted");
       });
     });
-    el.querySelectorAll("[data-toggle-task]").forEach(function (cb) {
-      cb.addEventListener("change", function () {
-        var id = cb.getAttribute("data-toggle-task");
+    el.querySelectorAll("[data-set-study-task-status]").forEach(function (sel) {
+      sel.addEventListener("change", function () {
+        var id = sel.getAttribute("data-set-study-task-status");
         var task = state.studyTasks.find(function (t) {
           return t.id === id;
         });
         if (!task) return;
-        task.status = cb.checked ? "Completed" : "In Progress";
-        task.completion = cb.checked ? 100 : task.completion;
+        // Mirrors the exact rule openStudyTaskModal() already applies on
+        // save - completion snaps to 100 only when reaching Completed, and
+        // is otherwise left as-is (no forced reset when leaving it).
+        task.status = sel.value;
+        if (sel.value === "Completed") task.completion = 100;
         task.lastWorkedOn = todayISO();
         task.updatedAt = new Date().toISOString();
         saveState();
         renderAll();
+        showToast(task.title + " marked " + sel.value);
       });
     });
     el.querySelectorAll("[data-edit-task]").forEach(function (btn) {
@@ -2812,6 +2918,12 @@
     return p.status === codingProjectFilter;
   }
 
+  function codingTaskStatusOptionsHtml(selected) {
+    return CODING_TASK_STATUSES.map(function (s) {
+      return '<option value="' + s + '"' + (s === selected ? " selected" : "") + ">" + s + "</option>";
+    }).join("");
+  }
+
   function renderCodingProjects() {
     var el = document.getElementById("coding-projects-list");
     var filtered = state.codingProjects.filter(codingProjectMatchesFilter);
@@ -2882,7 +2994,9 @@
                       '<div class="coding-task-main">' +
                       '<div class="coding-task-title">' + escapeHtml(t.title) + (t.isNextAction ? ' <span class="badge badge-next-action">Next Action</span>' : "") + "</div>" +
                       '<div class="coding-task-badges">' +
-                      '<span class="badge ' + taskStatusBadgeClass(t.status) + '">' + escapeHtml(t.status) + "</span>" +
+                      '<select class="badge badge-select ' + taskStatusBadgeClass(t.status) + '" data-set-coding-task-status="' + t.id + '" aria-label="Status for ' + escapeHtml(t.title) + '">' +
+                      codingTaskStatusOptionsHtml(t.status) +
+                      "</select>" +
                       '<span class="badge ' + taskPriorityBadgeClass(t.priority) + '">' + escapeHtml(t.priority) + "</span>" +
                       "</div>" +
                       '<div class="coding-task-meta' + (overdue ? " overdue" : "") + '">' +
@@ -3010,6 +3124,23 @@
         saveState();
         renderAll();
         showToast("Task deleted");
+      });
+    });
+    el.querySelectorAll("[data-set-coding-task-status]").forEach(function (sel) {
+      sel.addEventListener("change", function () {
+        var id = sel.getAttribute("data-set-coding-task-status");
+        var task = findCodingTask(id);
+        if (!task) return;
+        // Mirrors the exact rule openCodingTaskModal() already applies on
+        // save: completing the current Next Action clears the flag rather
+        // than silently reassigning it - the user picks the next one
+        // explicitly via "Set as Next Action".
+        task.status = sel.value;
+        if (sel.value === "Done") task.isNextAction = false;
+        task.updatedAt = new Date().toISOString();
+        saveState();
+        renderAll();
+        showToast(task.title + " marked " + sel.value);
       });
     });
     el.querySelectorAll("[data-set-next-action]").forEach(function (btn) {
