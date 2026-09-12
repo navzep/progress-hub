@@ -2531,11 +2531,16 @@
         var nextDueTask = computeSubjectNextDueTask(subj.id);
         var expanded = !!expandedStudySubjectIds[subj.id];
 
-        var progressGroupHtml =
-          '<div class="study-subject-progress-group">' +
-          confidenceBarHtml(stats.percent, "Progress") +
-          '<div class="item-card-meta">' + (stats.total ? stats.completed + " / " + stats.total + " tasks complete" : "No tasks yet") + "</div>" +
-          "</div>";
+        // A subject with no tasks yet has nothing for a progress bar to
+        // show - skip straight to "No tasks yet" instead of a permanent
+        // empty 0% bar, so the card stays compact until there's real
+        // progress to display.
+        var progressGroupHtml = stats.total
+          ? '<div class="study-subject-progress-group">' +
+            confidenceBarHtml(stats.percent, "Progress") +
+            '<div class="item-card-meta">' + stats.completed + " / " + stats.total + " tasks complete</div>" +
+            "</div>"
+          : '<div class="item-card-meta">No tasks yet</div>';
 
         // If the active task is also the nearest due task, show it once
         // ("Working on" takes precedence) rather than repeating its title -
@@ -2559,8 +2564,10 @@
               ? tasks
                   .map(function (t) {
                     var overdue = !!(t.dueDate && t.dueDate < today && t.status !== "Completed");
+                    var isActiveTask = t.status === "In Progress" || t.status === "Reviewing";
+                    var rowStateClass = t.status === "Completed" ? " completed" : isActiveTask ? " is-active" : "";
                     return (
-                      '<div class="study-task-row' + (t.status === "Completed" ? " completed" : "") + '" data-id="' + t.id + '" data-study-task-id="' + t.id + '">' +
+                      '<div class="study-task-row' + rowStateClass + '" data-id="' + t.id + '" data-study-task-id="' + t.id + '">' +
                       '<div class="study-task-main">' +
                       '<div class="study-task-title">' + escapeHtml(t.title) + "</div>" +
                       '<div class="study-task-badges">' +
@@ -2592,7 +2599,7 @@
         var toggleLabel = "Tasks (" + stats.total + ") " + (expanded ? "▴" : "▾");
 
         return (
-          '<div class="item-card study-subject-card' + (expanded ? " is-expanded" : "") + '" data-id="' + subj.id + '" data-study-subject-id="' + subj.id + '">' +
+          '<div class="item-card study-subject-card' + (expanded ? " is-expanded" : "") + (stats.total ? "" : " is-empty") + '" data-id="' + subj.id + '" data-study-subject-id="' + subj.id + '">' +
           '<div class="item-card-header">' +
           '<div>' +
           '<div class="item-card-title">' + escapeHtml(subj.name) + "</div>" +

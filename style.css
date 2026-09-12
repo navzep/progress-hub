@@ -1022,9 +1022,33 @@ button.session-row:focus-visible {
   flex-wrap: wrap;
 }
 
-.study-task-row.completed,
 .coding-task-row.completed {
   opacity: 0.6;
+}
+
+/* Study-only emphasis: active work (In Progress / Reviewing) reads as the
+   most prominent row without changing size, so it doesn't compete with
+   completed rows for attention; completed rows recede via muted title
+   color and a flatter background rather than a blanket opacity (which
+   would also wash out the status badge and action buttons). Coding task
+   rows are untouched - this task is Study-only. */
+.study-task-row.is-active {
+  background: rgba(var(--accent-rgb), 0.08);
+  border-color: rgba(var(--accent-rgb), 0.45);
+}
+
+.study-task-row.is-active .study-task-title {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.study-task-row.completed {
+  background: var(--bg);
+}
+
+.study-task-row.completed .study-task-title {
+  color: var(--text-muted);
+  font-weight: 500;
 }
 
 .study-task-main,
@@ -1142,6 +1166,32 @@ button.session-row:focus-visible {
 .coding-project-card,
 .study-subject-card {
   gap: 14px;
+}
+
+/* A subject with zero tasks has nothing to show but its name, the "No
+   tasks yet" line, and its action row - tighten the card's own gap/padding
+   so it doesn't reserve the same vertical space as a card full of
+   progress/focus content. Coding project cards are untouched. */
+.study-subject-card.is-empty {
+  gap: 8px;
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+/* Study-only: Rename/Archive/Edit read as secondary to the task/subject
+   content itself, so they're quieter than the base .button-secondary used
+   elsewhere (Coding included) - transparent instead of filled, muted text
+   until hover/focus. Delete keeps its .button-danger styling untouched. */
+.study-subject-actions .button-secondary,
+.study-task-actions .button-secondary {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.study-subject-actions .button-secondary:hover,
+.study-task-actions .button-secondary:hover {
+  background: var(--bg-subtle);
+  color: var(--text);
 }
 
 .coding-project-progress-group,
