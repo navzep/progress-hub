@@ -3115,7 +3115,130 @@
   }
 
   function listeningDupKey(artist, album) {
-    return (artist || "").trim().toLowerCase() + " " + (album || "").trim().toLowerCase();
+    return (artist || "").trim().toLowerCase() + " " + (album || "").trim().toLowerCase();
+  }
+
+  // ===================== ALBUM ARTWORK LOOKUP =====================
+  // iTunes Search API: no key required, CORS-enabled for browser fetch,
+  // public metadata only - nothing private to leak. Used purely to find a
+  // representative artwork image; never a dependency for saving album data.
+
+  function normalizeForArtworkMatch(s) {
+    return String(s || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^\w\s]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  // Isolated confidence policy, kept separate from the fetch/parse
+  // plumbing below so it can be tuned later (e.g. fuzzier title matching)
+  // without touching anything else in Listening. v1 is deliberately
+  // conservative: exact normalized artist match, plus an exact-or-
+  // substring normalized album match. A wrong cover is worse than no
+  // cover, so any weaker signal is treated as "not confident".
+  function isConfidentArtworkMatch(wantArtist, wantAlbum, candidateArtist, candidateAlbum) {
+    var gotArtist = normalizeForArtworkMatch(candidateArtist);
+    var gotAlbum = normalizeForArtworkMatch(candidateAlbum);
+    if (!gotArtist || !gotAlbum) return false;
+    var artistOk = gotArtist === wantArtist;
+    var albumOk = gotAlbum === wantAlbum || gotAlbum.indexOf(wantAlbum) !== -1 || wantAlbum.indexOf(gotAlbum) !== -1;
+    return artistOk && albumOk;
+  }
+
+  // Never throws and never blocks the caller for more than a few seconds
+  // (aborted via AbortController) - resolves to a URL string on a
+  // confident match, or null for "no artwork" (no result, low-confidence
+  // match, offline, timeout, bad response, etc).
+  async function fetchAlbumArtworkUrl(artist, album) {
+    var term = (String(artist || "") + " " + String(album || "")).trim();
+    if (!term) return null;
+    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timeoutId = controller ? setTimeout(function () { controller.abort(); }, 6000) : null;
+    try {
+      var url = "https://itunes.apple.com/search?term=" + encodeURIComponent(term) + "&entity=album&limit=5";
+      var res = await fetch(url, controller ? { signal: controller.signal } : {});
+      if (!res || !res.ok) return null;
+      var json = await res.json();
+      if (!json || !Array.isArray(json.results)) return null;
+
+      var wantArtist = normalizeForArtworkMatch(artist);
+      var wantAlbum = normalizeForArtworkMatch(album);
+      if (!wantArtist || !wantAlbum) return null;
+
+      var match = json.results.find(function (r) {
+        if (!r || !r.artistName || !r.collectionName || !r.artworkUrl100) return false;
+        return isConfidentArtworkMatch(wantArtist, wantAlbum, r.artistName, r.collectionName);
+      });
+      if (!match) return null;
+      // iTunes artwork URLs encode their size in the filename (e.g.
+      // "100x100bb.jpg") - swapping in a larger size is a well-known,
+      // documented trick that avoids a second request. Falls back to the
+      // original (smaller) URL untouched if the pattern isn't present.
+      return match.artworkUrl100.replace("100x100bb", "300x300bb");
+    } catch (e) {
+      return null;
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+  }
+
+  // Fire-and-forget: looks up artwork for one album and, only if it still
+  // exists and still has no artwork of its own by the time the network
+  // request resolves, applies it. Deliberately does not touch updatedAt -
+  // a background fill completing later shouldn't reorder the list the way
+  // a real edit would.
+  function lookupAndApplyArtwork(albumId) {
+    var album = state.listening.find(function (a) { return a.id === albumId; });
+    if (!album) return;
+    fetchAlbumArtworkUrl(album.artist, album.album)
+      .then(function (url) {
+        if (!url) return;
+        var current = state.listening.find(function (a) { return a.id === albumId; });
+        if (!current || current.artworkUrl) return;
+        current.artworkUrl = url;
+        saveState();
+        renderAll();
+      })
+      .catch(function () {});
+  }
+
+  function initListeningFetchMissingArtwork() {
+    var btn = document.getElementById("fetch-listening-artwork-btn");
+    if (!btn) return;
+    btn.addEventListener("click", async function () {
+      var targets = state.listening.filter(function (a) { return !a.artworkUrl; });
+      if (!targets.length) {
+        showToast("No albums are missing artwork");
+        return;
+      }
+      btn.disabled = true;
+      var originalLabel = btn.textContent;
+      var found = 0;
+      var notFound = 0;
+      for (var i = 0; i < targets.length; i++) {
+        var target = targets[i];
+        btn.textContent = "Fetching " + (i + 1) + " / " + targets.length + "…";
+        try {
+          var url = await fetchAlbumArtworkUrl(target.artist, target.album);
+          var current = state.listening.find(function (a) { return a.id === target.id; });
+          if (current && !current.artworkUrl && url) {
+            current.artworkUrl = url;
+            found++;
+          } else if (!url) {
+            notFound++;
+          }
+        } catch (e) {
+          notFound++;
+        }
+      }
+      saveState();
+      renderAll();
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+      showToast(found + " artwork" + (found === 1 ? "" : "s") + " found" + (notFound > 0 ? ", " + notFound + " not found" : ""));
+    });
   }
 
   function renderListening() {
@@ -3135,12 +3258,19 @@
 
     el.innerHTML = sorted
       .map(function (a) {
+        var artworkUrl = a.artworkUrl || "";
         return (
           '<div class="item-card" data-id="' + a.id + '" data-listening-id="' + a.id + '">' +
           '<div class="item-card-header">' +
-          '<div>' +
+          '<div class="listening-card-head">' +
+          '<div class="listening-artwork-wrap">' +
+          '<div class="listening-artwork-placeholder">🎵</div>' +
+          (artworkUrl ? '<img class="listening-artwork" src="' + escapeHtml(artworkUrl) + '" alt="" loading="lazy">' : "") +
+          "</div>" +
+          '<div class="listening-card-headtext">' +
           '<div class="item-card-title">' + escapeHtml(a.album) + "</div>" +
           '<div class="item-card-meta">' + escapeHtml(a.artist) + "</div>" +
+          "</div>" +
           "</div>" +
           '<span class="badge ' + listeningBadgeClass(a.status) + '">' + escapeHtml(a.status) + "</span>" +
           "</div>" +
@@ -3156,6 +3286,20 @@
         );
       })
       .join("");
+
+    // A broken image URL (dead link, network hiccup) hides itself so the
+    // always-present placeholder underneath shows through, instead of a
+    // broken-image icon - the wrap's fixed size keeps the card's
+    // dimensions identical either way.
+    el.querySelectorAll(".listening-artwork").forEach(function (img) {
+      img.addEventListener(
+        "error",
+        function () {
+          img.style.display = "none";
+        },
+        { once: true }
+      );
+    });
 
     el.querySelectorAll("[data-edit-listening]").forEach(function (btn) {
       btn.addEventListener("click", function () {
@@ -3249,12 +3393,16 @@
       } else {
         data.id = generateId();
         data.createdAt = data.updatedAt;
+        data.artworkUrl = "";
         state.listening.push(data);
       }
       saveState();
       renderAll();
       closeModal();
       showToast(album ? "Album updated" : "Album added");
+      // Fired after save/render/close - artwork is a nice-to-have that
+      // must never gate album creation on network availability.
+      if (!album) lookupAndApplyArtwork(data.id);
     });
   }
 
@@ -3314,6 +3462,7 @@
       var now = new Date().toISOString();
       var added = 0;
       var duplicates = 0;
+      var addedIds = [];
       result.albums.forEach(function (a) {
         var key = listeningDupKey(a.artist, a.album);
         if (existingKeys[key]) {
@@ -3321,8 +3470,9 @@
           return;
         }
         existingKeys[key] = true;
+        var id = generateId();
         state.listening.push({
-          id: generateId(),
+          id: id,
           artist: a.artist,
           album: a.album,
           status: a.status,
@@ -3330,9 +3480,11 @@
           favoriteTrack: "",
           notes: "",
           dateFinished: a.status === "Finished" ? todayISO() : "",
+          artworkUrl: "",
           createdAt: now,
           updatedAt: now,
         });
+        addedIds.push(id);
         added++;
       });
 
@@ -3344,6 +3496,11 @@
       if (duplicates > 0) msg += ", " + duplicates + " duplicate(s) skipped";
       if (result.invalidStatusCount > 0) msg += ", " + result.invalidStatusCount + " unrecognized status defaulted to To Listen";
       showToast(msg);
+
+      // Artwork lookup runs after import finishes and only for the albums
+      // actually created here - duplicates/skipped lines never re-trigger
+      // a fetch for an album that's already in the library.
+      addedIds.forEach(lookupAndApplyArtwork);
     });
   }
 
@@ -5095,6 +5252,7 @@
     initRaceFilter();
     initListeningFilter();
     initListeningPasteImporter();
+    initListeningFetchMissingArtwork();
     initStudyPasteImporter();
     initStudyArchivedToggle();
     initCodingProjectFilter();

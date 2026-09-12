@@ -508,6 +508,58 @@ body[data-theme="dark"] .rating-stars {
   color: #fbbf24;
 }
 
+/* ===================== LISTENING ARTWORK ===================== */
+/* A fixed-size thumbnail beside the title/artist (inside the existing
+   .item-card-header row) rather than a full-width stacked poster tile -
+   same information, without adding a large block of height to every card. */
+.listening-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.listening-card-headtext {
+  min-width: 0;
+}
+
+.listening-artwork-wrap {
+  position: relative;
+  width: 84px;
+  height: 84px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-subtle);
+}
+
+.listening-artwork-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.6rem;
+  color: var(--text-muted);
+  z-index: 1;
+}
+
+.listening-artwork {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 2;
+}
+
+@media (max-width: 480px) {
+  .listening-artwork-wrap {
+    width: 64px;
+    height: 64px;
+  }
+}
+
 .empty-state {
   color: var(--text-muted);
   font-size: 0.9rem;
