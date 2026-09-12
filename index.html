@@ -14,7 +14,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Progress Hub">
 
-<link rel="stylesheet" href="style.css?v=22">
+<link rel="stylesheet" href="style.css?v=23">
 </head>
 <body data-theme="dark">
 
@@ -88,60 +88,66 @@
   <section class="tab-section" data-section="training">
     <div class="section-header">
       <h2 class="section-title">Training</h2>
+      <button id="training-add-import-toggle" class="button button-primary" type="button" aria-expanded="false" aria-controls="training-add-import-panel">+ Add / Import Sessions</button>
     </div>
 
-    <div class="card">
-      <h3 class="card-title">Add a Session</h3>
-      <form id="add-session-form" class="stacked-form">
-        <div class="form-row">
-          <div class="form-group">
-            <label for="session-date-input">Date</label>
-            <input id="session-date-input" type="date" required>
+    <div id="training-add-import-panel" class="add-import-panel" hidden>
+      <div class="card">
+        <h3 class="card-title">Add a Session</h3>
+        <form id="add-session-form" class="stacked-form">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="session-date-input">Date</label>
+              <input id="session-date-input" type="date" required>
+            </div>
+            <div class="form-group">
+              <label for="session-sport-input">Sport</label>
+              <select id="session-sport-input">
+                <option>Swim</option>
+                <option>Bike</option>
+                <option>Run</option>
+                <option>Strength</option>
+                <option>Mobility</option>
+                <option>Recovery</option>
+                <option>Other</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="session-title-input">Title</label>
+              <input id="session-title-input" type="text" placeholder="e.g. Tempo run" required>
+            </div>
+            <div class="form-group">
+              <label for="session-duration-input">Duration</label>
+              <input id="session-duration-input" type="text" placeholder="e.g. 45 min">
+            </div>
           </div>
           <div class="form-group">
-            <label for="session-sport-input">Sport</label>
-            <select id="session-sport-input">
-              <option>Swim</option>
-              <option>Bike</option>
-              <option>Run</option>
-              <option>Strength</option>
-              <option>Mobility</option>
-              <option>Recovery</option>
-              <option>Other</option>
-            </select>
+            <label for="session-notes-input">Notes</label>
+            <textarea id="session-notes-input" rows="2"></textarea>
           </div>
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label for="session-title-input">Title</label>
-            <input id="session-title-input" type="text" placeholder="e.g. Tempo run" required>
-          </div>
-          <div class="form-group">
-            <label for="session-duration-input">Duration</label>
-            <input id="session-duration-input" type="text" placeholder="e.g. 45 min">
-          </div>
-        </div>
-        <div class="form-group">
-          <label for="session-notes-input">Notes</label>
-          <textarea id="session-notes-input" rows="2"></textarea>
-        </div>
-        <label class="checkbox-label">
-          <input id="session-completed-input" type="checkbox">
-          Completed
-        </label>
-        <button type="submit" class="button button-primary">Add Session</button>
-      </form>
-    </div>
+          <label class="checkbox-label">
+            <input id="session-completed-input" type="checkbox">
+            Completed
+          </label>
+          <button type="submit" class="button button-primary">Add Session</button>
+        </form>
+      </div>
 
-    <div class="card">
-      <h3 class="card-title">Paste a Weekly Plan</h3>
-      <textarea id="plan-paste-input" class="plan-paste-textarea" rows="4" placeholder="Paste your weekly plan here..."></textarea>
-      <button id="parse-plan-btn" class="button button-primary" type="button">Parse &amp; Import</button>
-      <p class="example-label">Expected format:</p>
-      <pre class="example-block">Monday: Swim 45 min easy technique
+      <div class="card">
+        <h3 class="card-title">Paste a Weekly Plan</h3>
+        <textarea id="plan-paste-input" class="plan-paste-textarea" rows="4" placeholder="Paste your weekly plan here..."></textarea>
+        <button id="parse-plan-btn" class="button button-primary" type="button">Parse &amp; Import</button>
+        <button id="training-format-example-toggle" class="disclosure-toggle" type="button" aria-expanded="false" aria-controls="training-format-example-content">Show format example</button>
+        <div id="training-format-example-content" hidden>
+          <p class="example-label">Expected format:</p>
+          <pre class="example-block">Monday: Swim 45 min easy technique
 Tuesday: Run 5 km tempo
 Wednesday: Bike 60 min intervals</pre>
-      <p class="hint-text">Importing adds new sessions; it won't remove existing ones.</p>
+        </div>
+        <p class="hint-text">Importing adds new sessions; it won't remove existing ones.</p>
+      </div>
     </div>
 
     <div class="card">
@@ -175,21 +181,28 @@ Wednesday: Bike 60 min intervals</pre>
   <section class="tab-section" data-section="study">
     <div class="section-header">
       <h2 class="section-title">Study</h2>
+      <button id="study-add-import-toggle" class="button button-primary" type="button" aria-expanded="false" aria-controls="study-add-import-panel">+ Add / Import Tasks</button>
+    </div>
+
+    <div id="study-add-import-panel" class="add-import-panel" hidden>
       <div class="button-row">
         <button id="add-study-subject-btn" class="button button-secondary" type="button">+ Add Subject</button>
         <button id="add-study-task-btn" class="button button-primary" type="button">+ Add Task</button>
       </div>
-    </div>
 
-    <div class="card">
-      <h3 class="card-title">Paste Study Tasks</h3>
-      <textarea id="study-paste-input" class="plan-paste-textarea" rows="4" placeholder="Paste your study tasks here..."></textarea>
-      <button id="parse-study-btn" class="button button-primary" type="button">Parse &amp; Import</button>
-      <p class="example-label">Expected format:</p>
-      <pre class="example-block">Psychology | Assignment | Task 3 ethics draft | In Progress | High | 2026-09-15
+      <div class="card">
+        <h3 class="card-title">Paste Study Tasks</h3>
+        <textarea id="study-paste-input" class="plan-paste-textarea" rows="4" placeholder="Paste your study tasks here..."></textarea>
+        <button id="parse-study-btn" class="button button-primary" type="button">Parse &amp; Import</button>
+        <button id="study-format-example-toggle" class="disclosure-toggle" type="button" aria-expanded="false" aria-controls="study-format-example-content">Show format example</button>
+        <div id="study-format-example-content" hidden>
+          <p class="example-label">Expected format:</p>
+          <pre class="example-block">Psychology | Assignment | Task 3 ethics draft | In Progress | High | 2026-09-15
 Psychology | Reading | Review BPS ethics code | Not Started | Medium |
 Data Science with Python | Assignment | Candy Analysis | In Progress | High | 2026-09-20</pre>
-      <p class="hint-text">Or the simple format: Subject | Task Title — everything else defaults (Type: Other, Status: Not Started, Priority: Medium, no due date). New subjects are created automatically; duplicate tasks (same subject + title) are skipped.</p>
+        </div>
+        <p class="hint-text">Or the simple format: Subject | Task Title — everything else defaults (Type: Other, Status: Not Started, Priority: Medium, no due date). New subjects are created automatically; duplicate tasks (same subject + title) are skipped.</p>
+      </div>
     </div>
 
     <div id="study-subjects-list" class="card-grid"></div>
@@ -201,7 +214,7 @@ Data Science with Python | Assignment | Candy Analysis | In Progress | High | 20
   <section class="tab-section" data-section="listening">
     <div class="section-header">
       <h2 class="section-title">Listening</h2>
-      <button id="add-listening-album-btn" class="button button-primary" type="button">+ Add Album</button>
+      <button id="listening-add-import-toggle" class="button button-primary" type="button" aria-expanded="false" aria-controls="listening-add-import-panel">+ Add / Import Albums</button>
     </div>
 
     <div class="form-group filter-group">
@@ -215,15 +228,24 @@ Data Science with Python | Assignment | Candy Analysis | In Progress | High | 20
       </select>
     </div>
 
-    <div class="card">
-      <h3 class="card-title">Paste Listening List</h3>
-      <textarea id="listening-paste-input" class="plan-paste-textarea" rows="4" placeholder="Paste your listening list here..."></textarea>
-      <button id="parse-listening-btn" class="button button-primary" type="button">Parse &amp; Import</button>
-      <p class="example-label">Expected format:</p>
-      <pre class="example-block">Muddy Waters | Hard Again | To Listen
+    <div id="listening-add-import-panel" class="add-import-panel" hidden>
+      <div class="button-row">
+        <button id="add-listening-album-btn" class="button button-primary" type="button">+ Add Album</button>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">Paste Listening List</h3>
+        <textarea id="listening-paste-input" class="plan-paste-textarea" rows="4" placeholder="Paste your listening list here..."></textarea>
+        <button id="parse-listening-btn" class="button button-primary" type="button">Parse &amp; Import</button>
+        <button id="listening-format-example-toggle" class="disclosure-toggle" type="button" aria-expanded="false" aria-controls="listening-format-example-content">Show format example</button>
+        <div id="listening-format-example-content" hidden>
+          <p class="example-label">Expected format:</p>
+          <pre class="example-block">Muddy Waters | Hard Again | To Listen
 B.B. King | Live at the Regal | Finished
 Buddy Guy | Damn Right, I've Got the Blues</pre>
-      <p class="hint-text">Status is optional (defaults to "To Listen"). Importing adds new albums; duplicates (same artist + album) are skipped.</p>
+        </div>
+        <p class="hint-text">Status is optional (defaults to "To Listen"). Importing adds new albums; duplicates (same artist + album) are skipped.</p>
+      </div>
     </div>
 
     <div id="listening-list" class="card-grid"></div>
@@ -233,7 +255,7 @@ Buddy Guy | Damn Right, I've Got the Blues</pre>
   <section class="tab-section" data-section="codingProjects">
     <div class="section-header">
       <h2 class="section-title">Coding Projects</h2>
-      <button id="add-coding-project-btn" class="button button-primary" type="button">+ Add Project</button>
+      <button id="coding-add-import-toggle" class="button button-primary" type="button" aria-expanded="false" aria-controls="coding-add-import-panel">+ Add / Import Projects</button>
     </div>
 
     <div class="form-group filter-group">
@@ -249,15 +271,24 @@ Buddy Guy | Damn Right, I've Got the Blues</pre>
       </select>
     </div>
 
-    <div class="card">
-      <h3 class="card-title">Paste Coding Projects</h3>
-      <textarea id="coding-projects-paste-input" class="plan-paste-textarea" rows="4" placeholder="Paste your coding projects here..."></textarea>
-      <button id="parse-coding-projects-btn" class="button button-primary" type="button">Parse &amp; Import</button>
-      <p class="example-label">Expected format:</p>
-      <pre class="example-block">Progress Hub | Web App | Building | High | 90 | Run full regression test
+    <div id="coding-add-import-panel" class="add-import-panel" hidden>
+      <div class="button-row">
+        <button id="add-coding-project-btn" class="button button-primary" type="button">+ Add Project</button>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">Paste Coding Projects</h3>
+        <textarea id="coding-projects-paste-input" class="plan-paste-textarea" rows="4" placeholder="Paste your coding projects here..."></textarea>
+        <button id="parse-coding-projects-btn" class="button button-primary" type="button">Parse &amp; Import</button>
+        <button id="coding-format-example-toggle" class="disclosure-toggle" type="button" aria-expanded="false" aria-controls="coding-format-example-content">Show format example</button>
+        <div id="coding-format-example-content" hidden>
+          <p class="example-label">Expected format:</p>
+          <pre class="example-block">Progress Hub | Web App | Building | High | 90 | Run full regression test
 CSV QuickLook | Data Science | Idea | Medium | 0 | Build CSV upload prototype
 Holiday Planner | Web App | Planning | Medium | 10 | Design trip budget model</pre>
-      <p class="hint-text">Or the simple format: Project Name | Next Action — everything else defaults (Type: Other, Status: Idea, Priority: Medium, Progress: 0). Importing adds new projects; duplicates (same project name) are skipped.</p>
+        </div>
+        <p class="hint-text">Or the simple format: Project Name | Next Action — everything else defaults (Type: Other, Status: Idea, Priority: Medium, Progress: 0). Importing adds new projects; duplicates (same project name) are skipped.</p>
+      </div>
     </div>
 
     <div id="coding-projects-list" class="card-grid"></div>
@@ -308,6 +339,6 @@ Holiday Planner | Web App | Planning | Medium | 10 | Design trip budget model</p
 
 <!-- ===================== SUPABASE (CDN, no build step) ===================== -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-<script src="script.js?v=22"></script>
+<script src="script.js?v=23"></script>
 </body>
 </html>

@@ -326,6 +326,25 @@ body[data-theme="dark"] .tab-button:not(.active) {
   font-size: 1.1rem;
 }
 
+/* Collapsed-by-default "+ Add / Import" panel: content (summaries,
+   filters, existing cards) renders above/around this in the DOM, so with
+   the panel hidden the page reads content-first instead of leading with a
+   large form. */
+.add-import-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.add-import-panel[hidden] {
+  display: none;
+}
+
+.add-import-panel > .card {
+  margin-bottom: 0;
+}
+
 /* ===================== CARDS ===================== */
 .card {
   background: var(--bg-elevated);
@@ -1149,7 +1168,8 @@ button.session-row:focus-visible {
    separate from the primary action buttons below it. */
 .coding-tasks-toggle,
 .study-tasks-toggle,
-.coding-archived-toggle {
+.coding-archived-toggle,
+.disclosure-toggle {
   align-self: flex-start;
   background: none;
   border: none;
@@ -1165,13 +1185,15 @@ button.session-row:focus-visible {
 
 .coding-tasks-toggle:hover,
 .study-tasks-toggle:hover,
-.coding-archived-toggle:hover {
+.coding-archived-toggle:hover,
+.disclosure-toggle:hover {
   text-decoration: underline;
 }
 
 .coding-tasks-toggle:focus-visible,
 .study-tasks-toggle:focus-visible,
-.coding-archived-toggle:focus-visible {
+.coding-archived-toggle:focus-visible,
+.disclosure-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 4px;

@@ -5007,6 +5007,39 @@
     });
   }
 
+  // ===================== DISCLOSURE PANELS =====================
+  // Generic show/hide toggle used for the per-module "+ Add / Import"
+  // panels and their nested "Show format example" blocks - swaps the
+  // trigger's label along with the hidden attribute so it always reads
+  // correctly for the panel's current state, mirroring the existing
+  // Tasks (N) / Archived (N) disclosure convention.
+  function wireDisclosureToggle(toggleId, panelId, collapsedLabel, expandedLabel) {
+    var btn = document.getElementById(toggleId);
+    var panel = document.getElementById(panelId);
+    if (!btn || !panel) return;
+    function sync() {
+      btn.setAttribute("aria-expanded", panel.hidden ? "false" : "true");
+      btn.textContent = panel.hidden ? collapsedLabel : expandedLabel;
+    }
+    btn.addEventListener("click", function () {
+      panel.hidden = !panel.hidden;
+      sync();
+    });
+    sync();
+  }
+
+  function initDisclosurePanels() {
+    wireDisclosureToggle("training-add-import-toggle", "training-add-import-panel", "+ Add / Import Sessions", "▴ Hide Add / Import");
+    wireDisclosureToggle("coding-add-import-toggle", "coding-add-import-panel", "+ Add / Import Projects", "▴ Hide Add / Import");
+    wireDisclosureToggle("study-add-import-toggle", "study-add-import-panel", "+ Add / Import Tasks", "▴ Hide Add / Import");
+    wireDisclosureToggle("listening-add-import-toggle", "listening-add-import-panel", "+ Add / Import Albums", "▴ Hide Add / Import");
+
+    wireDisclosureToggle("training-format-example-toggle", "training-format-example-content", "Show format example", "Hide format example");
+    wireDisclosureToggle("coding-format-example-toggle", "coding-format-example-content", "Show format example", "Hide format example");
+    wireDisclosureToggle("study-format-example-toggle", "study-format-example-content", "Show format example", "Hide format example");
+    wireDisclosureToggle("listening-format-example-toggle", "listening-format-example-content", "Show format example", "Hide format example");
+  }
+
   // ===================== ADD BUTTONS =====================
 
   function initAddButtons() {
@@ -5048,6 +5081,7 @@
     initTheme();
     initTabs();
     initModal();
+    initDisclosurePanels();
     initAddButtons();
     initTrainingForm();
     initPlanParser();
