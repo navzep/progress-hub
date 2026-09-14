@@ -49,11 +49,30 @@
   var CODING_PROJECT_TYPES = ["Web App", "Python", "Data Science", "Automation", "Work Tool", "Mobile / PWA", "Other"];
   var CODING_TASK_STATUSES = ["To Do", "In Progress", "Blocked", "Testing", "Done"];
 
+  // Training Screenshot Import (Phase 2 UI + Phase 3 Edge Function) is
+  // fully built but parked - not ready for general use. This is the single
+  // switch that controls it: false hides the "Import Screenshot" card
+  // entirely and skips wiring its file input/dropzone/paste listeners, so
+  // nothing in the UI can reach requestScreenshotExtraction(). No other
+  // file checks this flag directly - renderTrainingScreenshotCard() and
+  // initTrainingScreenshotImport() are the only two gates, both driven by
+  // this one constant. Flip to true to reactivate; see
+  // supabase/functions/extract-training-screenshot/README.md for what
+  // else reactivation requires (deploying the Edge Function, setting
+  // ANTHROPIC_API_KEY - neither has been done).
+  var TRAINING_SCREENSHOT_IMPORT_ENABLED = false;
+
   var raceFilter = "All";
   var listeningFilter = "All";
   var codingProjectFilter = "All";
   var expandedCodingProjectIds = {};
   var expandedStudySubjectIds = {};
+  var trainingScreenshotFile = null;
+  var trainingScreenshotImageDataUrl = "";
+  var trainingScreenshotStatus = "idle"; // idle | extracting | error | preview
+  var trainingScreenshotError = "";
+  var trainingScreenshotWeekStart = ""; // ISO date of the Monday used to resolve day-name-only rows
+  var trainingScreenshotPreview = []; // array of preview-row objects while status === "preview"
   var archivedCodingSectionExpanded = false;
   var archivedStudySectionExpanded = false;
   var openManagementMenu = null;
@@ -488,6 +507,69 @@
     return state.codingTasks.filter(function (t) {
       return t.projectId === projectId;
     });
+  }
+
+  // Eligible "Move to Project" destinations: active (non-archived) projects,
+  // excluding the task's current project, and excluding Completed/Parked -
+  // moving active work into a project already marked finished/on-hold is
+  // more likely a mistake than an intent, and nothing elsewhere in the app
+  // currently gives Completed/Parked projects special "still fully open for
+  // new work" treatment that would argue against this. Sorted by name for a
+  // predictable dropdown.
+  function codingProjectMoveTargets(excludeProjectId) {
+    return activeCodingProjects()
+      .filter(function (p) {
+        return p.id !== excludeProjectId && p.status !== "Completed" && p.status !== "Parked";
+      })
+      .slice()
+      .sort(function (a, b) {
+        return (a.name || "").localeCompare(b.name || "");
+      });
+  }
+
+  // Canonical Next Action collision rule for ANY path that can change a
+  // coding task's projectId - the dedicated "Move to Project…" flow and
+  // Edit Task's own Project field both call this (rather than each having
+  // their own copy) specifically so the policy cannot drift between them
+  // again. Assumes task.projectId has ALREADY been updated to its new
+  // value; previousProjectId is only used to detect whether a move
+  // actually happened. Does not touch anything else on the task (title,
+  // status, dueDate, notes, lastWorkedOn, createdAt, updatedAt) - callers
+  // own those fields themselves, since "did the project change" and "what
+  // else changed" are different concerns with different rules (a pure
+  // Move deliberately never bumps updatedAt; an Edit always does).
+  //
+  // Rule: a moved task never silently creates a second Next Action in the
+  // destination. If the destination already has one, the moved task's own
+  // flag is cleared and the destination's existing Next Action is left
+  // untouched; the source project is never assigned a replacement. If the
+  // destination has none, the moved task keeps isNextAction as it was.
+  function resolveNextActionAfterReparent(task, previousProjectId) {
+    if (!task || task.projectId === previousProjectId) return { nextActionCollision: false };
+    if (!task.isNextAction) return { nextActionCollision: false };
+    var destHasNextAction = state.codingTasks.some(function (t) {
+      return t.projectId === task.projectId && t.id !== task.id && t.isNextAction && !isCodingTaskEffectivelyArchived(t);
+    });
+    if (destHasNextAction) {
+      task.isNextAction = false;
+      return { nextActionCollision: true };
+    }
+    return { nextActionCollision: false };
+  }
+
+  // Moves a task to a different (already-validated-eligible) project,
+  // changing only projectId and - via resolveNextActionAfterReparent() -
+  // conditionally isNextAction. Every other field (title, status, priority,
+  // dueDate, notes, lastWorkedOn, createdAt, updatedAt) is left exactly as
+  // it was: a move is a change of parent, not an edit of the task's own
+  // content, so its own "last modified" timestamp deliberately does not
+  // advance.
+  function moveCodingTaskToProject(taskId, destProjectId) {
+    var task = findCodingTask(taskId);
+    if (!task || task.projectId === destProjectId) return null;
+    var previousProjectId = task.projectId;
+    task.projectId = destProjectId;
+    return resolveNextActionAfterReparent(task, previousProjectId);
   }
 
   // Archive is reversible and separate from Delete - archived
@@ -1089,8 +1171,12 @@
       renderListening();
       scrollAndHighlight('[data-listening-id="' + item.itemId + '"]');
     } else if (item.module === "codingProjects") {
-      var project = findCodingProject(item.itemId);
       var targetTask = item.taskId ? findCodingTask(item.taskId) : null;
+      // When a task id is given, resolve its CURRENT project live rather
+      // than trusting item.itemId - a task's projectId can change (Move to
+      // Project), and the link must land wherever it actually lives now,
+      // not wherever it lived when the link was built.
+      var project = targetTask ? findCodingProject(targetTask.projectId) : findCodingProject(item.itemId);
       // Under normal operation an archived item is never the deep-link
       // target (Dashboard/Attention already exclude archived content from
       // their selection), but handle it explicitly rather than silently
@@ -1915,6 +2001,7 @@
   function renderTraining() {
     renderTrainingStats();
     renderTrainingSessions();
+    renderTrainingScreenshotCard();
   }
 
   function renderTrainingStats() {
@@ -2111,6 +2198,557 @@
       renderAll();
       showToast(parsed.length + " session(s) imported");
     });
+  }
+
+  // ===================== TRAINING: SCREENSHOT IMPORT =====================
+  // Additive import path alongside Add Session / Paste Weekly Plan - neither
+  // of which this touches. Extraction is isolated behind
+  // requestScreenshotExtraction() so Phase 3 (a real Supabase Edge Function
+  // call) only ever replaces that one function's body; everything else here
+  // (preview, editing, duplicate detection, import) is already final.
+
+  var TRAINING_SCREENSHOT_ACCEPTED_TYPES = ["image/png", "image/jpeg", "image/webp"];
+
+  function mapExtractedSportName(raw) {
+    var s = String(raw || "").trim().toLowerCase();
+    if (!s) return "Other";
+    var exact = SPORT_NAMES.find(function (n) { return n.toLowerCase() === s; });
+    if (exact) return exact;
+    if (/swim/.test(s)) return "Swim";
+    if (/bike|cycl|ride|spin/.test(s)) return "Bike";
+    if (/run|jog|treadmill/.test(s)) return "Run";
+    if (/strength|weight|lift|gym/.test(s)) return "Strength";
+    if (/mobility|yoga|stretch/.test(s)) return "Mobility";
+    if (/recovery|rest\b|sleep/.test(s)) return "Recovery";
+    return "Other";
+  }
+
+  // Separate from the existing dateForDayName() (which always uses the
+  // CURRENT week and backs Paste Weekly Plan) - a screenshot may be of a
+  // past or future week, so this resolves against a user-confirmed week
+  // start instead. dateForDayName() itself is untouched.
+  function dateForDayNameInWeek(dayName, weekStartIso) {
+    var idx = DAY_ORDER.indexOf(dayName);
+    if (idx === -1 || !weekStartIso) return null;
+    var monday = localDateFromISO(weekStartIso);
+    var d = new Date(monday);
+    d.setDate(monday.getDate() + idx);
+    return isoFromDate(d);
+  }
+
+  function trainingDupKey(date, sport, title) {
+    return (date || "") + "|" + String(sport || "").toLowerCase() + "|" + String(title || "").trim().toLowerCase();
+  }
+
+  function resolvePreviewRowDate(row) {
+    return row.explicitDate || dateForDayNameInWeek(row.dayName, trainingScreenshotWeekStart) || "";
+  }
+
+  // Recomputes every row's resolved date (the week-start picker affects all
+  // day-name-only rows at once) and flags probable duplicates - both against
+  // existing state.trainingSessions and against earlier rows in the same
+  // batch. Conservative on purpose: date + sport + title must all match, so
+  // two different sessions on the same day are never falsely flagged.
+  function recomputeScreenshotPreviewDatesAndDuplicates() {
+    var existingKeys = {};
+    state.trainingSessions.forEach(function (s) {
+      existingKeys[trainingDupKey(s.date, s.sport, s.title)] = true;
+    });
+    var seenInBatch = {};
+    trainingScreenshotPreview.forEach(function (row) {
+      row.resolvedDate = resolvePreviewRowDate(row);
+      var key = trainingDupKey(row.resolvedDate, row.sport, row.title);
+      row.isDuplicate = !!existingKeys[key] || !!seenInBatch[key];
+      seenInBatch[key] = true;
+    });
+  }
+
+  var TRAINING_SCREENSHOT_MAX_DIMENSION = 1600; // longest side, in px
+  var TRAINING_SCREENSHOT_JPEG_QUALITY = 0.85;
+  var TRAINING_SCREENSHOT_EXTRACTION_TIMEOUT_MS = 30000;
+
+  // Resizes to a sensible maximum dimension and re-encodes at a lossy
+  // quality where the format supports it - phone screenshots are routinely
+  // 3-4x larger than needed for a model to read on-screen text, and this
+  // keeps the upload small without a visible loss of legibility. The
+  // original file (and its full-resolution preview thumbnail) is untouched;
+  // this only affects what gets sent over the network. Falls back to the
+  // original file, uncompressed, if canvas processing fails for any reason
+  // (e.g. an exotic format the browser can decode but not draw) rather than
+  // blocking extraction entirely.
+  function compressScreenshotForUpload(file) {
+    return new Promise(function (resolve) {
+      var objectUrl = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        URL.revokeObjectURL(objectUrl);
+        try {
+          var scale = Math.min(1, TRAINING_SCREENSHOT_MAX_DIMENSION / Math.max(img.naturalWidth, img.naturalHeight));
+          var width = Math.max(1, Math.round(img.naturalWidth * scale));
+          var height = Math.max(1, Math.round(img.naturalHeight * scale));
+          var canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          var ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, width, height);
+          // Preserve the original format (PNG/JPEG/WebP) where practical -
+          // only PNG is lossless regardless of the quality argument, so a
+          // PNG screenshot is still shrunk by resizing even though it isn't
+          // recompressed lossily.
+          var outputType = TRAINING_SCREENSHOT_ACCEPTED_TYPES.indexOf(file.type) !== -1 ? file.type : "image/jpeg";
+          var quality = outputType === "image/png" ? undefined : TRAINING_SCREENSHOT_JPEG_QUALITY;
+          canvas.toBlob(
+            function (blob) {
+              if (!blob) { resolve({ blob: file, mimeType: file.type }); return; }
+              resolve({ blob: blob, mimeType: outputType });
+            },
+            outputType,
+            quality
+          );
+        } catch (e) {
+          resolve({ blob: file, mimeType: file.type });
+        }
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(objectUrl);
+        resolve({ blob: file, mimeType: file.type });
+      };
+      img.src = objectUrl;
+    });
+  }
+
+  function blobToBase64(blob) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var result = String(reader.result || "");
+        var commaIndex = result.indexOf(",");
+        resolve(commaIndex === -1 ? result : result.slice(commaIndex + 1));
+      };
+      reader.onerror = function () { reject(new Error("Could not read image data")); };
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  // Marks an error's message as safe to show the user as-is, distinguishing
+  // it from a raw/unexpected error (a rejected fetch, a browser API
+  // failure) whose message might be a low-level string like "Failed to
+  // fetch" - those get a generic, friendly fallback instead at the final
+  // catch in requestScreenshotExtraction.
+  function friendlyError(message) {
+    var err = new Error(message);
+    err.isFriendly = true;
+    return err;
+  }
+
+  function withTimeout(promise, ms, message) {
+    return new Promise(function (resolve, reject) {
+      var timer = setTimeout(function () { reject(friendlyError(message || "Timed out")); }, ms);
+      promise.then(
+        function (v) { clearTimeout(timer); resolve(v); },
+        function (e) { clearTimeout(timer); reject(e); }
+      );
+    });
+  }
+
+  // supabase-js wraps a non-2xx Edge Function response as a
+  // FunctionsHttpError whose .context is the raw Response - the function's
+  // own { ok:false, error } JSON body (and status) is still readable from
+  // it, so users see the specific message rather than a generic failure.
+  function mapEdgeFunctionErrorToResult(error) {
+    var status = error && error.context && error.context.status;
+    return Promise.resolve()
+      .then(function () {
+        if (error && error.context && typeof error.context.json === "function") {
+          return error.context.json();
+        }
+        return null;
+      })
+      .catch(function () { return null; })
+      .then(function (body) {
+        var serverMessage = body && body.error;
+        if (status === 401 || status === 403) {
+          return { ok: false, error: serverMessage || "Please sign in again to import from a screenshot." };
+        }
+        if (status === 429) {
+          return { ok: false, error: serverMessage || "Too many screenshot imports right now - please wait a few minutes and try again." };
+        }
+        if (status === 504) {
+          return { ok: false, error: serverMessage || "Extraction timed out. Please try again." };
+        }
+        if (status === 422) {
+          return { ok: false, error: serverMessage || "Could not understand the extraction result. Please try again or enter sessions manually." };
+        }
+        if (status === 502 || status === 500) {
+          return { ok: false, error: serverMessage || "The extraction service is temporarily unavailable. Please try again shortly." };
+        }
+        return { ok: false, error: serverMessage || "Could not extract sessions from this image." };
+      });
+  }
+
+  // Never throws, never rejects - always resolves to { ok, sessions } or
+  // { ok: false, error }. window.__mockScreenshotExtraction is a test-only
+  // override, checked first so the entire suite below never makes a real
+  // network call. Real usage calls the Supabase Edge Function - the
+  // provider's own secret never appears in this file or any browser code.
+  function requestScreenshotExtraction(file) {
+    if (typeof window !== "undefined" && typeof window.__mockScreenshotExtraction === "function") {
+      return Promise.resolve()
+        .then(function () { return window.__mockScreenshotExtraction(file); })
+        .catch(function (e) { return { ok: false, error: String((e && e.message) || e || "Extraction failed") }; });
+    }
+
+    if (!supabaseClient || !currentUser) {
+      return Promise.resolve({ ok: false, error: "Sign in to import sessions from a screenshot." });
+    }
+    if (!supabaseClient.functions || typeof supabaseClient.functions.invoke !== "function") {
+      return Promise.resolve({ ok: false, error: "Screenshot import is not available right now." });
+    }
+
+    return compressScreenshotForUpload(file)
+      .then(function (compressed) {
+        return blobToBase64(compressed.blob).then(function (base64) {
+          return { base64: base64, mimeType: compressed.mimeType };
+        });
+      })
+      .catch(function () {
+        throw friendlyError("Could not process this image. Please try a different screenshot.");
+      })
+      .then(function (payload) {
+        // Test-only override so the timeout path can be exercised quickly
+        // and deterministically without a real 30s wait; unset in
+        // production, where the real constant always applies.
+        var timeoutMs = (typeof window !== "undefined" && window.__trainingScreenshotTimeoutMsOverride) || TRAINING_SCREENSHOT_EXTRACTION_TIMEOUT_MS;
+        return withTimeout(
+          supabaseClient.functions.invoke("extract-training-screenshot", {
+            body: { image: payload.base64, mimeType: payload.mimeType },
+          }),
+          timeoutMs,
+          "Extraction timed out. Please try again."
+        );
+      })
+      .then(function (res) {
+        if (res.error) return mapEdgeFunctionErrorToResult(res.error);
+        if (!res.data || typeof res.data !== "object") {
+          return { ok: false, error: "Unexpected response from the extraction service." };
+        }
+        // The function's own response already matches { ok, sessions } |
+        // { ok: false, error } - no reshaping needed.
+        return res.data;
+      })
+      .catch(function (e) {
+        // Only a message we deliberately wrote ourselves (friendlyError) is
+        // safe to show verbatim - anything else (a rejected fetch, some
+        // other browser API failure) gets a generic message instead of its
+        // raw, possibly low-level text (e.g. "Failed to fetch").
+        if (e && e.isFriendly && e.message) return { ok: false, error: e.message };
+        console.error("Screenshot extraction failed:", e);
+        return { ok: false, error: "Could not reach the extraction service. Check your connection and try again." };
+      });
+  }
+
+  function resetTrainingScreenshotState() {
+    trainingScreenshotFile = null;
+    trainingScreenshotImageDataUrl = "";
+    trainingScreenshotStatus = "idle";
+    trainingScreenshotError = "";
+    trainingScreenshotPreview = [];
+  }
+
+  function handleTrainingScreenshotFile(file) {
+    if (!file) return;
+    if (TRAINING_SCREENSHOT_ACCEPTED_TYPES.indexOf(file.type) === -1) {
+      trainingScreenshotStatus = "error";
+      trainingScreenshotError = "Unsupported file type. Please choose a PNG, JPEG, or WebP image.";
+      renderTrainingScreenshotCard();
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function () {
+      trainingScreenshotFile = file;
+      trainingScreenshotImageDataUrl = String(reader.result || "");
+      trainingScreenshotStatus = "idle";
+      trainingScreenshotError = "";
+      trainingScreenshotPreview = [];
+      renderTrainingScreenshotCard();
+    };
+    reader.onerror = function () {
+      trainingScreenshotStatus = "error";
+      trainingScreenshotError = "Could not read that image file. Please try again.";
+      renderTrainingScreenshotCard();
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function runTrainingScreenshotExtraction() {
+    if (!trainingScreenshotFile) return;
+    trainingScreenshotStatus = "extracting";
+    trainingScreenshotError = "";
+    renderTrainingScreenshotCard();
+    requestScreenshotExtraction(trainingScreenshotFile).then(function (result) {
+      // The user may have removed/replaced the image while this was in
+      // flight - discard a stale result rather than overwriting new state.
+      if (trainingScreenshotStatus !== "extracting") return;
+      if (!result || !result.ok || !Array.isArray(result.sessions) || !result.sessions.length) {
+        trainingScreenshotStatus = "error";
+        trainingScreenshotError = (result && result.error) || "No sessions could be detected in this image.";
+        renderTrainingScreenshotCard();
+        return;
+      }
+      trainingScreenshotWeekStart = isoFromDate(startOfWeek(new Date()));
+      trainingScreenshotPreview = result.sessions.map(function (s, i) {
+        return {
+          previewId: "ss-" + i + "-" + generateId(),
+          dayName: s.dayName || null,
+          explicitDate: s.explicitDate || null,
+          resolvedDate: "",
+          time: s.time || "",
+          sport: mapExtractedSportName(s.sport),
+          title: String(s.title || "").trim(),
+          duration: s.duration || "",
+          notes: s.notes || "",
+          completed: s.completed === true,
+          isDuplicate: false,
+          importAnyway: false,
+        };
+      });
+      recomputeScreenshotPreviewDatesAndDuplicates();
+      trainingScreenshotStatus = "preview";
+      renderTrainingScreenshotCard();
+    });
+  }
+
+  function trainingScreenshotDropzoneHtml() {
+    return (
+      '<div class="screenshot-dropzone" id="training-screenshot-dropzone" tabindex="0" role="button" aria-label="Choose or drop a training plan screenshot to import">' +
+      '<div class="screenshot-dropzone-icon" aria-hidden="true">🖼️</div>' +
+      '<div class="hint-text">Drag and drop a screenshot here, paste from clipboard, or</div>' +
+      '<button type="button" class="button button-secondary button-small" id="training-screenshot-choose-btn">Choose Image</button>' +
+      "</div>"
+    );
+  }
+
+  function trainingScreenshotPreviewRowHtml(row, index) {
+    return (
+      '<div class="screenshot-session-row" data-preview-index="' + index + '">' +
+      (row.isDuplicate ? '<div class="screenshot-duplicate-badge">Possible duplicate</div>' : "") +
+      '<div class="form-row">' +
+      '<div class="form-group"><label for="ss-date-' + index + '">Date</label><input id="ss-date-' + index + '" type="date" data-field="resolvedDate" data-preview-index="' + index + '" value="' + escapeHtml(row.resolvedDate) + '"></div>' +
+      '<div class="form-group"><label for="ss-time-' + index + '">Time</label><input id="ss-time-' + index + '" type="text" data-field="time" data-preview-index="' + index + '" value="' + escapeHtml(row.time) + '" placeholder="e.g. 5:00 AM"></div>' +
+      "</div>" +
+      '<div class="form-row">' +
+      '<div class="form-group"><label for="ss-sport-' + index + '">Sport</label><select id="ss-sport-' + index + '" data-field="sport" data-preview-index="' + index + '">' +
+      SPORT_NAMES.concat(["Other"]).map(function (s) { return '<option value="' + s + '"' + (row.sport === s ? " selected" : "") + ">" + s + "</option>"; }).join("") +
+      "</select></div>" +
+      '<div class="form-group"><label for="ss-duration-' + index + '">Duration</label><input id="ss-duration-' + index + '" type="text" data-field="duration" data-preview-index="' + index + '" value="' + escapeHtml(row.duration) + '"></div>' +
+      "</div>" +
+      '<div class="form-group"><label for="ss-title-' + index + '">Title</label><input id="ss-title-' + index + '" type="text" data-field="title" data-preview-index="' + index + '" value="' + escapeHtml(row.title) + '"></div>' +
+      '<div class="form-group"><label for="ss-notes-' + index + '">Notes</label><input id="ss-notes-' + index + '" type="text" data-field="notes" data-preview-index="' + index + '" value="' + escapeHtml(row.notes) + '"></div>' +
+      '<label class="checkbox-label"><input type="checkbox" data-field="completed" data-preview-index="' + index + '"' + (row.completed ? " checked" : "") + "> Completed</label>" +
+      (row.isDuplicate ? '<label class="checkbox-label"><input type="checkbox" data-field="importAnyway" data-preview-index="' + index + '"' + (row.importAnyway ? " checked" : "") + "> Import anyway</label>" : "") +
+      '<button type="button" class="button button-danger button-small" data-remove-preview="' + index + '">Remove</button>' +
+      "</div>"
+    );
+  }
+
+  function renderTrainingScreenshotCard() {
+    var body = document.getElementById("training-screenshot-body");
+    if (!body) return;
+    // Parked feature - card stays hidden (see initTrainingScreenshotImport)
+    // and there is nothing to render into it.
+    if (!TRAINING_SCREENSHOT_IMPORT_ENABLED) return;
+
+    if (trainingScreenshotStatus === "idle" && !trainingScreenshotImageDataUrl) {
+      body.innerHTML = trainingScreenshotDropzoneHtml();
+    } else if (trainingScreenshotStatus === "idle" || trainingScreenshotStatus === "extracting") {
+      body.innerHTML =
+        '<div class="screenshot-preview-row">' +
+        '<img class="screenshot-thumb" src="' + escapeHtml(trainingScreenshotImageDataUrl) + '" alt="Selected training plan screenshot">' +
+        '<div class="button-row">' +
+        '<button type="button" class="button button-secondary button-small" id="training-screenshot-replace-btn"' + (trainingScreenshotStatus === "extracting" ? " disabled" : "") + ">Replace</button>" +
+        '<button type="button" class="button button-danger button-small" id="training-screenshot-remove-btn"' + (trainingScreenshotStatus === "extracting" ? " disabled" : "") + ">Remove</button>" +
+        "</div>" +
+        "</div>" +
+        (trainingScreenshotStatus === "extracting"
+          ? '<p class="hint-text" role="status">Extracting sessions…</p><button type="button" class="button button-primary" id="training-screenshot-extract-btn" disabled>Extracting…</button>'
+          : '<button type="button" class="button button-primary" id="training-screenshot-extract-btn">Extract Sessions</button>');
+    } else if (trainingScreenshotStatus === "error") {
+      body.innerHTML =
+        (trainingScreenshotImageDataUrl ? '<div class="screenshot-preview-row"><img class="screenshot-thumb" src="' + escapeHtml(trainingScreenshotImageDataUrl) + '" alt="Selected training plan screenshot"></div>' : "") +
+        '<div class="screenshot-error" role="alert">' + escapeHtml(trainingScreenshotError) + "</div>" +
+        '<div class="button-row">' +
+        (trainingScreenshotFile ? '<button type="button" class="button button-secondary button-small" id="training-screenshot-retry-btn">Retry</button>' : "") +
+        '<button type="button" class="button button-secondary button-small" id="training-screenshot-remove-btn">Remove</button>' +
+        "</div>" +
+        '<p class="hint-text">You can also use Paste a Weekly Plan or Add a Session above.</p>';
+    } else if (trainingScreenshotStatus === "preview") {
+      var needsWeekPicker = trainingScreenshotPreview.some(function (r) { return !r.explicitDate; });
+      body.innerHTML =
+        '<div class="screenshot-preview-header">' + trainingScreenshotPreview.length + " session(s) detected</div>" +
+        (needsWeekPicker
+          ? '<div class="form-group"><label for="training-screenshot-week-start">Week starting (Monday)</label><input type="date" id="training-screenshot-week-start" value="' + escapeHtml(trainingScreenshotWeekStart) + '"></div>'
+          : "") +
+        '<div class="screenshot-session-list">' +
+        trainingScreenshotPreview.map(trainingScreenshotPreviewRowHtml).join("") +
+        "</div>" +
+        '<div class="button-row">' +
+        '<button type="button" class="button button-primary" id="training-screenshot-import-btn">Import Sessions</button>' +
+        '<button type="button" class="button button-secondary" id="training-screenshot-cancel-btn">Cancel</button>' +
+        "</div>";
+    }
+
+    wireTrainingScreenshotBody(body);
+  }
+
+  function wireTrainingScreenshotBody(body) {
+    var chooseBtn = document.getElementById("training-screenshot-choose-btn");
+    if (chooseBtn) chooseBtn.addEventListener("click", function () { document.getElementById("training-screenshot-file-input").click(); });
+
+    var dropzone = document.getElementById("training-screenshot-dropzone");
+    if (dropzone) {
+      dropzone.addEventListener("click", function () { document.getElementById("training-screenshot-file-input").click(); });
+      dropzone.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          document.getElementById("training-screenshot-file-input").click();
+        }
+      });
+      dropzone.addEventListener("dragover", function (e) { e.preventDefault(); dropzone.classList.add("dragover"); });
+      dropzone.addEventListener("dragleave", function () { dropzone.classList.remove("dragover"); });
+      dropzone.addEventListener("drop", function (e) {
+        e.preventDefault();
+        dropzone.classList.remove("dragover");
+        var file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        if (file) handleTrainingScreenshotFile(file);
+      });
+    }
+
+    var replaceBtn = document.getElementById("training-screenshot-replace-btn");
+    if (replaceBtn) replaceBtn.addEventListener("click", function () { document.getElementById("training-screenshot-file-input").click(); });
+
+    var removeBtn = document.getElementById("training-screenshot-remove-btn");
+    if (removeBtn) removeBtn.addEventListener("click", function () { resetTrainingScreenshotState(); renderTrainingScreenshotCard(); });
+
+    var extractBtn = document.getElementById("training-screenshot-extract-btn");
+    if (extractBtn) extractBtn.addEventListener("click", runTrainingScreenshotExtraction);
+
+    var retryBtn = document.getElementById("training-screenshot-retry-btn");
+    if (retryBtn) retryBtn.addEventListener("click", runTrainingScreenshotExtraction);
+
+    var cancelBtn = document.getElementById("training-screenshot-cancel-btn");
+    if (cancelBtn) cancelBtn.addEventListener("click", function () { resetTrainingScreenshotState(); renderTrainingScreenshotCard(); });
+
+    var weekInput = document.getElementById("training-screenshot-week-start");
+    if (weekInput) {
+      weekInput.addEventListener("change", function () {
+        trainingScreenshotWeekStart = weekInput.value;
+        recomputeScreenshotPreviewDatesAndDuplicates();
+        renderTrainingScreenshotCard();
+      });
+    }
+
+    body.querySelectorAll("[data-remove-preview]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var idx = Number(btn.getAttribute("data-remove-preview"));
+        trainingScreenshotPreview.splice(idx, 1);
+        if (!trainingScreenshotPreview.length) {
+          resetTrainingScreenshotState();
+        }
+        renderTrainingScreenshotCard();
+      });
+    });
+
+    body.querySelectorAll("[data-field]").forEach(function (input) {
+      var eventName = input.type === "checkbox" ? "change" : input.tagName === "SELECT" ? "change" : "input";
+      input.addEventListener(eventName, function () {
+        var idx = Number(input.getAttribute("data-preview-index"));
+        var row = trainingScreenshotPreview[idx];
+        if (!row) return;
+        var field = input.getAttribute("data-field");
+        if (field === "completed" || field === "importAnyway") {
+          row[field] = input.checked;
+        } else if (field === "resolvedDate") {
+          row.explicitDate = input.value || null;
+          row.dayName = null;
+          recomputeScreenshotPreviewDatesAndDuplicates();
+          renderTrainingScreenshotCard();
+          return;
+        } else {
+          row[field] = input.value;
+          if (field === "sport" || field === "title") recomputeScreenshotPreviewDatesAndDuplicates();
+        }
+      });
+    });
+
+    var importBtn = document.getElementById("training-screenshot-import-btn");
+    if (importBtn) {
+      importBtn.addEventListener("click", function () {
+        var toImport = trainingScreenshotPreview.filter(function (row) {
+          return !row.isDuplicate || row.importAnyway;
+        });
+        var skipped = trainingScreenshotPreview.length - toImport.length;
+        toImport.forEach(function (row) {
+          var notes = row.time ? row.time + (row.notes ? " — " + row.notes : "") : row.notes;
+          state.trainingSessions.push({
+            id: generateId(),
+            date: row.resolvedDate,
+            sport: row.sport,
+            title: row.title || "Untitled session",
+            duration: row.duration,
+            notes: notes,
+            completed: !!row.completed,
+          });
+        });
+        saveState();
+        resetTrainingScreenshotState();
+        renderAll();
+        var msg = toImport.length + " session(s) imported";
+        if (skipped > 0) msg += ", " + skipped + " duplicate(s) skipped";
+        showToast(msg);
+      });
+    }
+  }
+
+  function initTrainingScreenshotImport() {
+    var card = document.getElementById("training-screenshot-card");
+    // Single source of truth for the parked/reactivated state: hides the
+    // card (index.html already has it hidden by default) and, when
+    // disabled, skips every listener below entirely - the file input has
+    // no change handler, the dropzone has no click/drag/drop handlers, and
+    // the document-level paste listener is never registered. Nothing in
+    // the UI can reach requestScreenshotExtraction() while this is false.
+    if (card) card.hidden = !TRAINING_SCREENSHOT_IMPORT_ENABLED;
+    if (!TRAINING_SCREENSHOT_IMPORT_ENABLED) return;
+
+    var fileInput = document.getElementById("training-screenshot-file-input");
+    if (!fileInput) return;
+    fileInput.addEventListener("change", function () {
+      var file = fileInput.files && fileInput.files[0];
+      fileInput.value = "";
+      if (file) handleTrainingScreenshotFile(file);
+    });
+
+    // Clipboard paste is scoped to whether an image is actually present in
+    // the clipboard - text pasted anywhere else in the app (e.g. the Paste
+    // Weekly Plan textarea) is never intercepted.
+    document.addEventListener("paste", function (e) {
+      var panel = document.getElementById("training-add-import-panel");
+      if (!panel || panel.hidden) return;
+      var items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].type && items[i].type.indexOf("image/") === 0) {
+          var file = items[i].getAsFile();
+          if (file) {
+            e.preventDefault();
+            handleTrainingScreenshotFile(file);
+          }
+          return;
+        }
+      }
+    });
+
+    renderTrainingScreenshotCard();
   }
 
   // ===================== RACES =====================
@@ -3700,6 +4338,11 @@
         openCodingTaskModal(btn.getAttribute("data-edit-coding-task"), null);
       });
     });
+    document.querySelectorAll("[data-move-coding-task]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        openMoveCodingTaskModal(btn.getAttribute("data-move-coding-task"));
+      });
+    });
     document.querySelectorAll("[data-delete-coding-task]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var id = btn.getAttribute("data-delete-coding-task");
@@ -3824,6 +4467,7 @@
                       '<button class="button button-secondary button-small" data-coding-task-worked-today="' + t.id + '" type="button">Worked On Today</button>' +
                       managementMenuHtml(
                         '<button class="menu-item" role="menuitem" data-edit-coding-task="' + t.id + '" type="button">Edit</button>' +
+                        '<button class="menu-item" role="menuitem" data-move-coding-task="' + t.id + '" type="button">Move to Project…</button>' +
                         '<button class="menu-item" role="menuitem" data-archive-coding-task="' + t.id + '" type="button">Archive</button>' +
                         '<button class="menu-item menu-item-danger" role="menuitem" data-delete-coding-task="' + t.id + '" type="button">Delete</button>',
                         "More actions for " + t.title
@@ -4294,8 +4938,9 @@
         updatedAt: new Date().toISOString(),
       };
       if (!data.title || !data.projectId) return;
+      var reparentResult = null;
       if (task) {
-        var projectChanged = task.projectId !== data.projectId;
+        var previousProjectId = task.projectId;
         data.createdAt = task.createdAt || task.updatedAt || data.updatedAt;
         data.lastWorkedOn = task.lastWorkedOn || null;
         // Next Action rule: completing the current Next Action task clears
@@ -4303,12 +4948,11 @@
         // the user picks the next one explicitly via "Set as Next Action".
         data.isNextAction = data.status === "Done" ? false : task.isNextAction;
         Object.assign(task, data);
-        // Moving a task to a different project could otherwise leave that
-        // project with two isNextAction:true tasks - re-enforce uniqueness
-        // in the destination project when that's the case.
-        if (projectChanged && task.isNextAction) {
-          setNextActionTask(task.projectId, task.id);
-        }
+        // Changing Project here uses the exact same canonical collision
+        // rule as the dedicated "Move to Project…" flow, so the two can
+        // never drift apart again: the destination's existing Next Action
+        // always wins over an incoming one, never the other way around.
+        reparentResult = resolveNextActionAfterReparent(task, previousProjectId);
       } else {
         data.id = generateId();
         data.createdAt = data.updatedAt;
@@ -4320,8 +4964,82 @@
       saveState();
       renderAll();
       closeModal();
-      showToast(task ? "Task updated" : "Task added");
+      if (reparentResult && reparentResult.nextActionCollision) {
+        showToast("Task updated. Existing Next Action kept.");
+      } else {
+        showToast(task ? "Task updated" : "Task added");
+      }
     });
+  }
+
+  // A dedicated small modal rather than reusing Edit's own Project
+  // dropdown: this one is purpose-built for a focused "which project"
+  // decision (current project shown for context, destination list
+  // pre-filtered to eligible targets). It shares its Next Action collision
+  // policy with Edit's Project field via resolveNextActionAfterReparent()
+  // above, so the two can't disagree on what happens to isNextAction - only
+  // the surrounding UI (a small modal vs. one field in the full edit form)
+  // differs.
+  function moveCodingTaskFieldsHtml(task, currentProject, targets) {
+    var header =
+      '<div class="form-group"><label>Task</label><p class="item-card-meta">' + escapeHtml(task.title) + "</p></div>" +
+      '<div class="form-group"><label>Current Project</label><p class="item-card-meta">' + escapeHtml(currentProject ? currentProject.name : "—") + "</p></div>";
+
+    if (!targets.length) {
+      return (
+        header +
+        '<p class="hint-text">No other projects available.</p>' +
+        '<div class="button-row">' +
+        '<button type="submit" class="button button-primary" disabled>Move Task</button>' +
+        '<button type="button" class="button button-secondary" id="move-task-cancel-btn">Cancel</button>' +
+        "</div>"
+      );
+    }
+
+    return (
+      header +
+      '<div class="form-group">' +
+      '<label for="mtf-project">Move to</label>' +
+      '<select id="mtf-project" name="destProjectId" required>' +
+      targets.map(function (p) { return '<option value="' + p.id + '">' + escapeHtml(p.name) + "</option>"; }).join("") +
+      "</select>" +
+      "</div>" +
+      '<div class="button-row">' +
+      '<button type="submit" class="button button-primary">Move Task</button>' +
+      '<button type="button" class="button button-secondary" id="move-task-cancel-btn">Cancel</button>' +
+      "</div>"
+    );
+  }
+
+  function openMoveCodingTaskModal(taskId) {
+    var task = findCodingTask(taskId);
+    if (!task) return;
+    var currentProject = findCodingProject(task.projectId);
+    var targets = codingProjectMoveTargets(task.projectId);
+    openModal(
+      "Move Task",
+      moveCodingTaskFieldsHtml(task, currentProject, targets),
+      function (formData) {
+        var destProjectId = formData.get("destProjectId");
+        if (!destProjectId) return;
+        var destProject = findCodingProject(destProjectId);
+        var result = moveCodingTaskToProject(taskId, destProjectId);
+        if (!result) return;
+        saveState();
+        renderAll();
+        closeModal();
+        showToast(
+          result.nextActionCollision
+            ? "Task moved. Existing Next Action kept."
+            : "Task moved to " + (destProject ? destProject.name : "project") + "."
+        );
+      },
+      function (form) {
+        var cancelBtn = form.querySelector("#move-task-cancel-btn");
+        if (cancelBtn) cancelBtn.addEventListener("click", closeModal);
+      },
+      { noSaveButton: true }
+    );
   }
 
   function codingTaskDupKey(title) {
@@ -5249,6 +5967,7 @@
     initAddButtons();
     initTrainingForm();
     initPlanParser();
+    initTrainingScreenshotImport();
     initRaceFilter();
     initListeningFilter();
     initListeningPasteImporter();

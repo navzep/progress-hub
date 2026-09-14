@@ -1052,6 +1052,98 @@ button.session-row:focus-visible {
   gap: 8px;
 }
 
+/* ===================== TRAINING: SCREENSHOT IMPORT ===================== */
+.screenshot-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  border: 2px dashed var(--border);
+  border-radius: 10px;
+  padding: 28px 16px;
+  cursor: pointer;
+}
+
+.screenshot-dropzone:hover,
+.screenshot-dropzone:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.screenshot-dropzone.dragover {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.06);
+}
+
+.screenshot-dropzone-icon {
+  font-size: 1.8rem;
+}
+
+.screenshot-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.screenshot-thumb {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.screenshot-error {
+  color: var(--danger);
+  font-size: 0.85rem;
+  margin-bottom: 8px;
+}
+
+.screenshot-preview-header {
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.screenshot-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.screenshot-session-row {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--bg-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.screenshot-duplicate-badge {
+  align-self: flex-start;
+  background: rgba(230, 160, 40, 0.18);
+  color: #c58a1f;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+@media (max-width: 480px) {
+  .screenshot-thumb {
+    width: 72px;
+    height: 72px;
+  }
+}
+
 /* ===================== STUDY ===================== */
 .study-tasks-list,
 .coding-tasks-list {

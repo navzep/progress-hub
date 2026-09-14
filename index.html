@@ -14,7 +14,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Progress Hub">
 
-<link rel="stylesheet" href="style.css?v=25">
+<link rel="stylesheet" href="style.css?v=30">
 </head>
 <body data-theme="dark">
 
@@ -147,6 +147,13 @@ Tuesday: Run 5 km tempo
 Wednesday: Bike 60 min intervals</pre>
         </div>
         <p class="hint-text">Importing adds new sessions; it won't remove existing ones.</p>
+      </div>
+
+      <div class="card" id="training-screenshot-card" hidden>
+        <h3 class="card-title">Import Screenshot</h3>
+        <p class="hint-text">Upload a screenshot of a training plan (TriDot, TrainingPeaks, Garmin, etc.) to extract sessions automatically. You'll review and edit everything before it's added.</p>
+        <div id="training-screenshot-body"></div>
+        <input id="training-screenshot-file-input" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Upload training plan screenshot" hidden>
       </div>
     </div>
 
@@ -340,6 +347,6 @@ Holiday Planner | Web App | Planning | Medium | 10 | Design trip budget model</p
 
 <!-- ===================== SUPABASE (CDN, no build step) ===================== -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-<script src="script.js?v=25"></script>
+<script src="script.js?v=30"></script>
 </body>
 </html>
