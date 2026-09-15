@@ -711,6 +711,88 @@ body[data-theme="dark"] .rating-stars {
   text-decoration: underline;
 }
 
+/* ===================== DASHBOARD CUSTOMIZATION ===================== */
+/* The one visible trace of this feature on the normal (non-customizing)
+   Dashboard - a single small button. Everything else (drag handles, move
+   arrows, visibility toggles) lives inside the Customize Dashboard modal
+   and never touches the real card markup, so closing the modal leaves the
+   Dashboard exactly as polished as it was before this feature existed. */
+.dashboard-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.dashboard-customize-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.dashboard-customize-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  min-height: var(--tap-min);
+  flex-wrap: wrap;
+}
+
+.dashboard-customize-row.is-dragging {
+  opacity: 0.5;
+}
+
+.dc-drag-handle {
+  cursor: grab;
+  color: var(--text-muted);
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.dc-row-label {
+  font-weight: 600;
+  font-size: 0.88rem;
+  flex: 1;
+  min-width: 120px;
+}
+
+.dc-row-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Full 44px (--tap-min) hit area, same convention .button-small already
+   uses elsewhere in the app (compact padding, full-size tap target) - only
+   the glyph itself (font-size) stays small, so the row doesn't read as
+   bulkier than it did at 36px despite the larger touch target. */
+.dc-row-controls .icon-button {
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  padding: 0;
+  font-size: 0.85rem;
+}
+
+.dc-row-controls .icon-button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.dc-row-controls .icon-button:disabled:hover {
+  background: none;
+}
+
+/* Visible/Hidden reuses the existing button-secondary treatment; Hidden
+   just dims further so scanning the list for what's off is quick. */
+.dc-visibility-btn.is-hidden {
+  opacity: 0.6;
+}
+
 /* ===================== DASHBOARD DRILL-DOWN HIGHLIGHT ===================== */
 @keyframes dashboard-highlight-fade {
   0% { box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.35); outline-color: var(--accent); }

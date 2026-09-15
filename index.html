@@ -14,7 +14,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Progress Hub">
 
-<link rel="stylesheet" href="style.css?v=32">
+<link rel="stylesheet" href="style.css?v=34">
 </head>
 <body data-theme="dark">
 
@@ -50,6 +50,9 @@
 
   <!-- ===================== DASHBOARD TAB ===================== -->
   <section class="tab-section active" data-section="dashboard">
+    <div class="dashboard-toolbar">
+      <button id="customize-dashboard-btn" class="button button-secondary button-small" type="button">⚙ Customize Dashboard</button>
+    </div>
     <div id="dashboard-content" class="dashboard-grid"></div>
 
     <div class="card data-card">
@@ -347,6 +350,6 @@ Holiday Planner | Web App | Planning | Medium | 10 | Design trip budget model</p
 
 <!-- ===================== SUPABASE (CDN, no build step) ===================== -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-<script src="script.js?v=32"></script>
+<script src="script.js?v=34"></script>
 </body>
 </html>

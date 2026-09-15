@@ -49,6 +49,42 @@
   var CODING_PROJECT_TYPES = ["Web App", "Python", "Data Science", "Automation", "Work Tool", "Mobile / PWA", "Other"];
   var CODING_TASK_STATUSES = ["To Do", "In Progress", "Blocked", "Testing", "Done"];
 
+  // ===================== DASHBOARD CUSTOMIZATION =====================
+  // Single registry every customizable Dashboard card is defined against -
+  // stable ids (never visible title text) so saved preferences survive a
+  // relabeling, and "zone" says which existing visual area a card renders
+  // in: "tile" = the compact stat-card grid up top, "full" = the stacked
+  // full-width cards below it (Weekly Summary, Today's Training,
+  // Attention). Reordering is one flat list (dashboardPreferences.order)
+  // spanning both zones, but rendering only ever reorders WITHIN a zone -
+  // this is what keeps "drag Weekly Summary around" from being able to
+  // splice a full-width card into the middle of the tile grid, which would
+  // break the existing Dashboard layout the sprint brief explicitly
+  // protects. DEFAULT_DASHBOARD_ORDER is exactly today's visual order, so
+  // a user with no saved preferences sees no change at all.
+  //
+  // Declared here (before `var state = loadState();` below) rather than
+  // near the rest of the Dashboard Customization code further down the
+  // file - defaultState()/loadState() run immediately at module load and
+  // already need DEFAULT_DASHBOARD_ORDER, and `var` initializers (unlike
+  // function declarations) run in source order, not fully hoisted.
+  var DASHBOARD_CARD_DEFINITIONS = [
+    { id: "guitar", label: "Guitar Items", zone: "tile" },
+    { id: "trainingWeek", label: "Training This Week", zone: "tile" },
+    { id: "racePipeline", label: "Race Pipeline", zone: "tile" },
+    { id: "nextRace", label: "Next Confirmed Race", zone: "tile" },
+    { id: "study", label: "Study", zone: "tile" },
+    { id: "listening", label: "Listening", zone: "tile" },
+    { id: "codingProjects", label: "Coding Projects", zone: "tile" },
+    { id: "weeklySummary", label: "Weekly Summary", zone: "full" },
+    { id: "todayTraining", label: "Today's Training", zone: "full" },
+    { id: "attention", label: "Items Needing Attention", zone: "full" },
+  ];
+  var DASHBOARD_CARD_IDS = DASHBOARD_CARD_DEFINITIONS.map(function (d) {
+    return d.id;
+  });
+  var DEFAULT_DASHBOARD_ORDER = DASHBOARD_CARD_IDS.slice();
+
   // Training Screenshot Import (Phase 2 UI + Phase 3 Edge Function) is
   // fully built but parked - not ready for general use. This is the single
   // switch that controls it: false hides the "Import Screenshot" card
@@ -308,7 +344,250 @@
       studyTasks: [],
       codingProjects: [],
       codingTasks: [],
+      dashboardPreferences: defaultDashboardPreferences(),
     };
+  }
+
+  function defaultDashboardPreferences() {
+    return { order: DEFAULT_DASHBOARD_ORDER.slice(), hidden: [] };
+  }
+
+  // Resilient by construction, not by special-casing every malformed shape
+  // someone could hand it: unknown ids are dropped (they're never in
+  // DASHBOARD_CARD_IDS so the indexOf check silently excludes them),
+  // duplicates are dropped (the `seen` map only lets an id through once),
+  // and any known id missing from the saved order - including a card added
+  // in a later version of the app that an old preferences object has never
+  // heard of - is appended at the end in DEFAULT_DASHBOARD_ORDER's relative
+  // sequence. `hidden` gets the same unknown/duplicate filtering. A
+  // missing, null, or non-object `raw` degrades all the way to
+  // defaultDashboardPreferences() with no special-casing needed, since
+  // every lookup below just treats a missing field as an empty array.
+  function normalizeDashboardPreferences(raw) {
+    var rawOrder = raw && Array.isArray(raw.order) ? raw.order : [];
+    var seen = {};
+    var order = [];
+    rawOrder.forEach(function (id) {
+      if (DASHBOARD_CARD_IDS.indexOf(id) !== -1 && !seen[id]) {
+        seen[id] = true;
+        order.push(id);
+      }
+    });
+    DEFAULT_DASHBOARD_ORDER.forEach(function (id) {
+      if (!seen[id]) {
+        seen[id] = true;
+        order.push(id);
+      }
+    });
+
+    var rawHidden = raw && Array.isArray(raw.hidden) ? raw.hidden : [];
+    var hiddenSeen = {};
+    var hidden = [];
+    rawHidden.forEach(function (id) {
+      if (DASHBOARD_CARD_IDS.indexOf(id) !== -1 && !hiddenSeen[id]) {
+        hiddenSeen[id] = true;
+        hidden.push(id);
+      }
+    });
+
+    return { order: order, hidden: hidden };
+  }
+
+  function getDashboardPreferences() {
+    return normalizeDashboardPreferences(state.dashboardPreferences);
+  }
+
+  function setDashboardPreferences(prefs) {
+    state.dashboardPreferences = prefs;
+  }
+
+  function moveDashboardCard(id, direction) {
+    var prefs = getDashboardPreferences();
+    var idx = prefs.order.indexOf(id);
+    var newIdx = idx + direction;
+    if (idx === -1 || newIdx < 0 || newIdx >= prefs.order.length) return;
+    var order = prefs.order.slice();
+    var swap = order[idx];
+    order[idx] = order[newIdx];
+    order[newIdx] = swap;
+    prefs.order = order;
+    setDashboardPreferences(prefs);
+  }
+
+  // Drag-and-drop reorder: moves `id` to sit immediately before `beforeId`
+  // in the flat order list (or to the end if beforeId is falsy/not found).
+  function reorderDashboardCard(id, beforeId) {
+    var prefs = getDashboardPreferences();
+    if (id === beforeId) return;
+    var order = prefs.order.filter(function (x) {
+      return x !== id;
+    });
+    var insertAt = beforeId ? order.indexOf(beforeId) : -1;
+    if (insertAt === -1) insertAt = order.length;
+    order.splice(insertAt, 0, id);
+    prefs.order = order;
+    setDashboardPreferences(prefs);
+  }
+
+  function toggleDashboardCardVisible(id) {
+    var prefs = getDashboardPreferences();
+    var hidden = prefs.hidden.slice();
+    var i = hidden.indexOf(id);
+    if (i === -1) hidden.push(id);
+    else hidden.splice(i, 1);
+    prefs.hidden = hidden;
+    setDashboardPreferences(prefs);
+  }
+
+  function resetDashboardPreferences() {
+    state.dashboardPreferences = defaultDashboardPreferences();
+  }
+
+  function dashboardCardLabel(id) {
+    var def = DASHBOARD_CARD_DEFINITIONS.filter(function (d) {
+      return d.id === id;
+    })[0];
+    return def ? def.label : id;
+  }
+
+  function dashboardCustomizeRowHtml(id, index, total, isHidden) {
+    var label = dashboardCardLabel(id);
+    return (
+      '<div class="dashboard-customize-row" draggable="true" data-dc-id="' + id + '">' +
+      '<span class="dc-drag-handle" aria-hidden="true">☰</span>' +
+      '<span class="dc-row-label">' + escapeHtml(label) + "</span>" +
+      '<div class="dc-row-controls">' +
+      '<button type="button" class="icon-button" data-dc-move-up="' + id + '"' + (index === 0 ? " disabled" : "") + ' aria-label="Move ' + escapeHtml(label) + ' up">↑</button>' +
+      '<button type="button" class="icon-button" data-dc-move-down="' + id + '"' + (index === total - 1 ? " disabled" : "") + ' aria-label="Move ' + escapeHtml(label) + ' down">↓</button>' +
+      '<button type="button" class="button button-secondary button-small dc-visibility-btn' + (isHidden ? " is-hidden" : "") + '" data-dc-toggle="' + id + '" aria-pressed="' + (!isHidden) + '">' + (isHidden ? "Hidden" : "Visible") + "</button>" +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  function dashboardCustomizeListHtml() {
+    var prefs = getDashboardPreferences();
+    return prefs.order
+      .map(function (id, idx) {
+        return dashboardCustomizeRowHtml(id, idx, prefs.order.length, prefs.hidden.indexOf(id) !== -1);
+      })
+      .join("");
+  }
+
+  function dashboardCustomizePanelHtml() {
+    return (
+      '<p class="hint-text">Choose which Dashboard cards are shown, and drag (or use the arrows) to reorder them.</p>' +
+      '<div class="dashboard-customize-list" id="dashboard-customize-list">' + dashboardCustomizeListHtml() + "</div>" +
+      '<div class="button-row">' +
+      '<button type="button" class="button button-secondary" id="dashboard-customize-reset-btn">Reset Dashboard</button>' +
+      '<button type="button" class="button button-primary" id="dashboard-customize-done-btn">Done</button>' +
+      "</div>"
+    );
+  }
+
+  // Every control here applies immediately (toggle, move, drag-drop, reset)
+  // rather than staging changes behind a separate Save step - saveState()
+  // + renderDashboard() run after each interaction so the real Dashboard
+  // behind the modal updates live, matching how every other list edit in
+  // this app already behaves (archive, status change, etc. all apply
+  // instantly). "Done" is just closeModal() - there is nothing left to
+  // commit.
+  function wireDashboardCustomizePanel(form) {
+    var draggedId = null;
+
+    function applyAndRerender() {
+      saveState();
+      renderDashboard();
+      var list = form.querySelector("#dashboard-customize-list");
+      if (list) list.innerHTML = dashboardCustomizeListHtml();
+      wireRows();
+    }
+
+    function wireRows() {
+      var list = form.querySelector("#dashboard-customize-list");
+      if (!list) return;
+
+      list.querySelectorAll("[data-dc-move-up]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          moveDashboardCard(btn.getAttribute("data-dc-move-up"), -1);
+          applyAndRerender();
+        });
+      });
+      list.querySelectorAll("[data-dc-move-down]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          moveDashboardCard(btn.getAttribute("data-dc-move-down"), 1);
+          applyAndRerender();
+        });
+      });
+      list.querySelectorAll("[data-dc-toggle]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          toggleDashboardCardVisible(btn.getAttribute("data-dc-toggle"));
+          applyAndRerender();
+        });
+      });
+
+      // Drag-and-drop reordering (desktop/iPad) - Move Up/Down above are
+      // the reliable, always-available mechanism (including on iPhone,
+      // where native HTML5 drag from touch isn't dependable); this is a
+      // progressive enhancement on top of it, not a replacement.
+      list.querySelectorAll(".dashboard-customize-row").forEach(function (row) {
+        row.addEventListener("dragstart", function (e) {
+          draggedId = row.getAttribute("data-dc-id");
+          row.classList.add("is-dragging");
+          e.dataTransfer.effectAllowed = "move";
+          try {
+            e.dataTransfer.setData("text/plain", draggedId);
+          } catch (err) {
+            // Some older WebViews reject setData - drop still works off
+            // draggedId, so this is harmless.
+          }
+        });
+        row.addEventListener("dragend", function () {
+          row.classList.remove("is-dragging");
+          draggedId = null;
+        });
+        row.addEventListener("dragover", function (e) {
+          if (!draggedId || draggedId === row.getAttribute("data-dc-id")) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+        });
+        row.addEventListener("drop", function (e) {
+          e.preventDefault();
+          var targetId = row.getAttribute("data-dc-id");
+          var sourceId = draggedId;
+          draggedId = null;
+          if (!sourceId || sourceId === targetId) return;
+          reorderDashboardCard(sourceId, targetId);
+          applyAndRerender();
+        });
+      });
+    }
+
+    wireRows();
+
+    var resetBtn = form.querySelector("#dashboard-customize-reset-btn");
+    if (resetBtn) {
+      resetBtn.addEventListener("click", function () {
+        if (!confirm("Reset the Dashboard to its default card order and visibility?")) return;
+        resetDashboardPreferences();
+        applyAndRerender();
+        showToast("Dashboard reset to defaults");
+      });
+    }
+
+    var doneBtn = form.querySelector("#dashboard-customize-done-btn");
+    if (doneBtn) doneBtn.addEventListener("click", closeModal);
+  }
+
+  function openDashboardCustomizeModal() {
+    openModal("Customize Dashboard", dashboardCustomizePanelHtml(), null, function (form) {
+      wireDashboardCustomizePanel(form);
+    }, { noSaveButton: true });
+  }
+
+  function initDashboardCustomize() {
+    var btn = document.getElementById("customize-dashboard-btn");
+    if (btn) btn.addEventListener("click", openDashboardCustomizeModal);
   }
 
   // One-time migration: the Study tab used to be a flat list of "topics"
@@ -407,6 +686,12 @@
     };
     migrateStudyShape(parsed, normalized);
     migrateCodingProjectTasks(parsed, normalized);
+    // Not gated behind a "had it before" migration flag like the arrays
+    // above - every load re-sanitizes dashboardPreferences (cheap, always
+    // idempotent), so a stale/malformed/missing shape from any source
+    // (old local state, an older export, a stale cloud row) self-heals on
+    // the very next load rather than needing its own one-time migration.
+    normalized.dashboardPreferences = normalizeDashboardPreferences(parsed.dashboardPreferences);
     return normalized;
   }
 
@@ -446,8 +731,16 @@
       var hadStudyGrouping = parsed && (Array.isArray(parsed.studySubjects) || Array.isArray(parsed.studyTasks));
       var hadCodingProjects = parsed && Array.isArray(parsed.codingProjects);
       var hadCodingTasks = parsed && Array.isArray(parsed.codingTasks);
+      var hadDashboardPreferences = !!(parsed && parsed.dashboardPreferences && typeof parsed.dashboardPreferences === "object");
       var normalized = normalizeState(parsed);
-      if (!hadListening || !hadStudyGrouping || !hadCodingProjects || !hadCodingTasks) {
+      // Not just "was the key missing" (unlike the had* flags above) -
+      // also re-persists when it was PRESENT but malformed (unknown ids,
+      // duplicates, wrong types: normalizeDashboardPreferences() already
+      // cleaned normalized.dashboardPreferences in-memory either way, this
+      // only decides whether the on-disk/cloud copy needs to catch up so
+      // stale junk doesn't sit there indefinitely).
+      var dashboardPreferencesChanged = hadDashboardPreferences && JSON.stringify(parsed.dashboardPreferences) !== JSON.stringify(normalized.dashboardPreferences);
+      if (!hadListening || !hadStudyGrouping || !hadCodingProjects || !hadCodingTasks || !hadDashboardPreferences || dashboardPreferencesChanged) {
         // One-time migrations: an existing saved user predating the
         // Listening module (add the starter library), predating the Study
         // Subjects/Tasks grouping (already folded into `normalized` by
@@ -2181,14 +2474,26 @@
     // Guitar, Study, and Coding Projects render as richer tiles (active-item
     // focus) rather than the plain label/value/sub shape, but stay in the
     // same grid alongside everything else — same position they held before.
-    el.innerHTML =
-      guitarStatCardHtml() +
-      simpleStatCardHtml(cards[0]) + // Training This Week
-      simpleStatCardHtml(cards[1]) + // Race Pipeline
-      simpleStatCardHtml(cards[2]) + // Next Confirmed Race
-      studyStatCardHtml() +
-      simpleStatCardHtml(cards[3]) + // Listening
-      codingProjectsStatCardHtml();
+    var tileCardHtmlById = {
+      guitar: guitarStatCardHtml(),
+      trainingWeek: simpleStatCardHtml(cards[0]),
+      racePipeline: simpleStatCardHtml(cards[1]),
+      nextRace: simpleStatCardHtml(cards[2]),
+      study: studyStatCardHtml(),
+      listening: simpleStatCardHtml(cards[3]),
+      codingProjects: codingProjectsStatCardHtml(),
+    };
+
+    var prefs = getDashboardPreferences();
+    var visibleTileIds = prefs.order.filter(function (id) {
+      return Object.prototype.hasOwnProperty.call(tileCardHtmlById, id) && prefs.hidden.indexOf(id) === -1;
+    });
+
+    el.innerHTML = visibleTileIds
+      .map(function (id) {
+        return tileCardHtmlById[id];
+      })
+      .join("");
 
     el.querySelectorAll("[data-goto]").forEach(function (btn) {
       btn.addEventListener("click", function () {
@@ -2233,9 +2538,61 @@
       });
     }
 
-    renderWeeklySummaryCard();
-    renderTodayTrainingCard();
-    renderAttentionCard();
+    // Full-width cards below the grid follow the same order/visibility
+    // preference. Each render*Card() function already knows how to
+    // create-or-find its own DOM node and insertBefore() it right ahead of
+    // .data-card (see each function) - calling them in the desired final
+    // sequence is sufficient to reorder them, since each call repositions
+    // its node immediately before the fixed .data-card anchor, displacing
+    // whatever was already placed there. A card that should be hidden is
+    // simply never called, after first removing any DOM node left over
+    // from before it was hidden.
+    var fullCardDomId = {
+      weeklySummary: "dashboard-weekly-summary",
+      todayTraining: "dashboard-today-training",
+      attention: "dashboard-attention",
+    };
+    var fullCardRenderers = {
+      weeklySummary: renderWeeklySummaryCard,
+      todayTraining: renderTodayTrainingCard,
+      attention: renderAttentionCard,
+    };
+    var visibleFullIds = prefs.order.filter(function (id) {
+      return Object.prototype.hasOwnProperty.call(fullCardRenderers, id) && prefs.hidden.indexOf(id) === -1;
+    });
+    Object.keys(fullCardRenderers).forEach(function (id) {
+      if (visibleFullIds.indexOf(id) === -1) {
+        var stale = document.getElementById(fullCardDomId[id]);
+        if (stale) stale.remove();
+      }
+    });
+    visibleFullIds.forEach(function (id) {
+      fullCardRenderers[id]();
+    });
+
+    renderDashboardEmptyState(!visibleTileIds.length && !visibleFullIds.length);
+  }
+
+  // Shown only when every customizable Dashboard card has been hidden -
+  // otherwise the tab would just render as a blank scroll with no
+  // indication of why, or any way back in short of remembering the
+  // Customize Dashboard button exists.
+  function renderDashboardEmptyState(shouldShow) {
+    var section = document.querySelector('.tab-section[data-section="dashboard"]');
+    if (!section) return;
+    var el = document.getElementById("dashboard-empty-state");
+    if (!shouldShow) {
+      if (el) el.remove();
+      return;
+    }
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "dashboard-empty-state";
+      el.className = "card";
+      var dataCard = section.querySelector(".data-card");
+      section.insertBefore(el, dataCard);
+    }
+    el.innerHTML = '<p class="card-subtext">No Dashboard cards are visible. Use Customize Dashboard above to bring some back.</p>';
   }
 
   // ===================== GUITAR =====================
@@ -6577,6 +6934,7 @@
     initCodingTaskDragAndDrop();
     initManagementMenus();
     initDataButtons();
+    initDashboardCustomize();
     initGlobalTimerControls();
     initAuth();
     renderAll();
