@@ -14,7 +14,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Progress Hub">
 
-<link rel="stylesheet" href="style.css?v=34">
+<link rel="stylesheet" href="style.css?v=36">
 </head>
 <body data-theme="dark">
 
@@ -31,9 +31,21 @@
       <button id="sign-out-btn" class="button button-secondary button-small" type="button">Sign Out</button>
     </span>
     <button id="sign-in-btn" class="button button-secondary button-small" type="button">Sign In</button>
+    <button id="global-search-btn" class="icon-button" type="button" title="Search (Ctrl/Cmd+K)" aria-label="Search Progress Hub">🔍</button>
     <button id="theme-toggle-btn" class="icon-button" type="button" title="Toggle light/dark theme">🌙</button>
   </div>
 </header>
+
+<!-- ===================== GLOBAL SEARCH ===================== -->
+<div id="search-overlay" class="search-overlay" hidden>
+  <div class="search-modal" role="dialog" aria-modal="true" aria-label="Search Progress Hub">
+    <div class="search-modal-header">
+      <input id="search-input" class="search-input" type="text" placeholder="Search across Progress Hub" autocomplete="off" aria-label="Search across Progress Hub">
+      <button id="search-close-btn" class="icon-button" type="button" aria-label="Close search">✕</button>
+    </div>
+    <div id="search-results" class="search-results"></div>
+  </div>
+</div>
 
 <!-- ===================== TAB BAR ===================== -->
 <nav class="tab-bar">
@@ -350,6 +362,6 @@ Holiday Planner | Web App | Planning | Medium | 10 | Design trip budget model</p
 
 <!-- ===================== SUPABASE (CDN, no build step) ===================== -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-<script src="script.js?v=34"></script>
+<script src="script.js?v=36"></script>
 </body>
 </html>

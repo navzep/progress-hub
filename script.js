@@ -117,6 +117,12 @@
   var archivedCodingSectionExpanded = false;
   var archivedStudySectionExpanded = false;
   var weeklySummaryExpanded = false;
+  // Flat, DOM-order list of {module,itemId,taskId?} for whatever search
+  // results are currently rendered - index N here is exactly the Nth
+  // [data-search-result-index] row, so arrow-key selection and Enter can
+  // resolve a result without re-deriving it from the DOM.
+  var searchResultNavItems = [];
+  var searchSelectedIndex = -1;
   var openManagementMenu = null;
 
   var activeTimer = {
@@ -1831,9 +1837,24 @@
           archivedStudySectionExpanded = true;
         }
         expandedStudySubjectIds[studyTask.subjectId] = true;
+        renderStudy();
+        scrollAndHighlight('[data-study-task-id="' + item.itemId + '"]');
+      } else {
+        // No task carries this id - it may instead be a SUBJECT's own id.
+        // Global Search can match a subject by name alone (no specific
+        // task involved), which the original task-only deep-link never
+        // needed to support until now. Extends the existing routing
+        // rather than adding a second navigation path: same stable-ID
+        // lookup pattern, same archived/expand handling, just resolved
+        // against studySubjects instead of studyTasks.
+        var studySubject = state.studySubjects.find(function (s) { return s.id === item.itemId; });
+        if (studySubject) {
+          if (isArchived(studySubject)) archivedStudySectionExpanded = true;
+          expandedStudySubjectIds[studySubject.id] = true;
+          renderStudy();
+          scrollAndHighlight('[data-study-subject-id="' + item.itemId + '"]');
+        }
       }
-      renderStudy();
-      scrollAndHighlight('[data-study-task-id="' + item.itemId + '"]');
     } else if (item.module === "listening") {
       var album = state.listening.find(function (a) { return a.id === item.itemId; });
       if (album && listeningFilter !== "All" && listeningFilter !== album.status) {
@@ -1872,6 +1893,377 @@
         : '[data-coding-project-id="' + item.itemId + '"]';
       scrollAndHighlight(codingTargetSelector);
     }
+  }
+
+  // ===================== GLOBAL SEARCH =====================
+  // Read-only, entirely derived from current state at query time - no
+  // index is persisted, nothing here ever calls saveState() (navigation
+  // is the only side effect, via the same navigateToItem() every other
+  // deep-link in the app already uses). Archived records are excluded,
+  // matching how Dashboard/Attention/Weekly Summary already treat
+  // archived content as "put away," not something a general search
+  // should surface.
+  var SEARCH_MODULE_ORDER = ["codingProjects", "study", "training", "guitar", "races", "listening"];
+  var SEARCH_MODULE_LABELS = {
+    codingProjects: "Coding",
+    study: "Study",
+    training: "Training",
+    guitar: "Guitar",
+    races: "Races",
+    listening: "Listening",
+  };
+
+  function buildSearchIndex() {
+    var index = [];
+
+    state.guitarItems.forEach(function (g) {
+      index.push({
+        module: "guitar",
+        title: g.title,
+        context: "",
+        meta: g.status || "",
+        isTask: false,
+        secondaryText: [g.type, g.status, g.goal].filter(Boolean).join(" "),
+        notesText: g.notes || "",
+        navItem: { module: "guitar", itemId: g.id },
+      });
+    });
+
+    state.trainingSessions.forEach(function (s) {
+      index.push({
+        module: "training",
+        title: s.title,
+        context: s.date ? formatDateNice(s.date) : "",
+        meta: [s.sport, s.duration].filter(Boolean).join(" · "),
+        isTask: false,
+        secondaryText: [s.sport, s.date].filter(Boolean).join(" "),
+        notesText: s.notes || "",
+        navItem: { module: "training", itemId: s.id },
+      });
+    });
+
+    state.races.forEach(function (r) {
+      index.push({
+        module: "races",
+        title: r.name,
+        context: "",
+        meta: [r.type, r.status].filter(Boolean).join(" · "),
+        isTask: false,
+        secondaryText: [r.location, r.type, r.status, r.goal].filter(Boolean).join(" "),
+        notesText: "",
+        navItem: { module: "races", itemId: r.id },
+      });
+    });
+
+    state.studySubjects.forEach(function (subj) {
+      if (isArchived(subj)) return;
+      index.push({
+        module: "study",
+        title: subj.name,
+        context: "",
+        meta: "Subject",
+        isTask: false,
+        secondaryText: "",
+        notesText: "",
+        navItem: { module: "study", itemId: subj.id },
+      });
+    });
+
+    state.studyTasks.forEach(function (t) {
+      if (isStudyTaskEffectivelyArchived(t)) return;
+      index.push({
+        module: "study",
+        title: t.title,
+        context: studySubjectName(t.subjectId) || "",
+        meta: "Status: " + t.status,
+        isTask: true,
+        secondaryText: [t.type, t.status, t.priority].filter(Boolean).join(" "),
+        notesText: t.notes || "",
+        navItem: { module: "study", itemId: t.id },
+      });
+    });
+
+    activeCodingProjects().forEach(function (p) {
+      index.push({
+        module: "codingProjects",
+        title: p.name,
+        context: "",
+        meta: "Status: " + p.status,
+        isTask: false,
+        secondaryText: [p.type, p.techStack, p.milestone, p.status].filter(Boolean).join(" "),
+        notesText: p.notes || "",
+        navItem: { module: "codingProjects", itemId: p.id },
+      });
+    });
+
+    state.codingTasks.forEach(function (t) {
+      if (isCodingTaskEffectivelyArchived(t)) return;
+      var project = findCodingProject(t.projectId);
+      index.push({
+        module: "codingProjects",
+        title: t.title,
+        context: project ? project.name : "",
+        meta: "Status: " + t.status,
+        isTask: true,
+        secondaryText: [t.status, t.priority].filter(Boolean).join(" "),
+        notesText: t.notes || "",
+        navItem: { module: "codingProjects", itemId: project ? project.id : t.projectId, taskId: t.id },
+      });
+    });
+
+    state.listening.forEach(function (a) {
+      index.push({
+        module: "listening",
+        title: a.album,
+        context: a.artist || "",
+        meta: a.status || "",
+        isTask: false,
+        secondaryText: [a.artist, a.favoriteTrack, a.status].filter(Boolean).join(" "),
+        notesText: a.notes || "",
+        navItem: { module: "listening", itemId: a.id },
+      });
+    });
+
+    return index;
+  }
+
+  function searchNormalize(s) {
+    return (s || "").toString().toLowerCase();
+  }
+
+  function searchCombinedText(rec) {
+    return [rec.title, rec.context, rec.secondaryText, rec.notesText].filter(Boolean).join(" ").toLowerCase();
+  }
+
+  // Small, deterministic 6-tier ranking (0 = best) - no scoring weights to
+  // tune, no library. Tiers 0-4 are "the full query appears as one
+  // contiguous substring somewhere increasingly secondary"; tier 5 is the
+  // "supabase sync"-style case where every token matched (that's already a
+  // precondition for a record reaching this function at all - see
+  // searchRecords()) but not as one contiguous phrase anywhere.
+  function rankSearchRecord(rec, queryLower) {
+    var titleLower = searchNormalize(rec.title);
+    if (titleLower === queryLower) return 0;
+    if (titleLower.indexOf(queryLower) === 0) return 1;
+    if (titleLower.indexOf(queryLower) !== -1) return 2;
+    var secondaryLower = searchNormalize(rec.context) + " " + searchNormalize(rec.meta) + " " + searchNormalize(rec.secondaryText);
+    if (secondaryLower.indexOf(queryLower) !== -1) return 3;
+    if (searchNormalize(rec.notesText).indexOf(queryLower) !== -1) return 4;
+    return 5;
+  }
+
+  function searchRecords(query) {
+    var trimmed = (query || "").trim();
+    if (!trimmed) return [];
+    var queryLower = trimmed.toLowerCase();
+    var tokens = queryLower.split(/\s+/).filter(Boolean);
+    var index = buildSearchIndex();
+    var matched = [];
+    index.forEach(function (rec) {
+      var combined = searchCombinedText(rec);
+      var allTokensMatch = tokens.every(function (tok) {
+        return combined.indexOf(tok) !== -1;
+      });
+      if (!allTokensMatch) return;
+      matched.push({ rec: rec, rank: rankSearchRecord(rec, queryLower) });
+    });
+    matched.sort(function (a, b) {
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      return searchNormalize(a.rec.title).localeCompare(searchNormalize(b.rec.title));
+    });
+    return matched.map(function (m) {
+      return m.rec;
+    });
+  }
+
+  // Fixed module display order (spec: Coding, Study, Training, Guitar,
+  // Races, Listening) - independent of each record's own rank, which only
+  // orders results WITHIN a group. Groups with zero results are omitted.
+  function groupSearchResults(records) {
+    var byModule = {};
+    records.forEach(function (rec) {
+      if (!byModule[rec.module]) byModule[rec.module] = [];
+      byModule[rec.module].push(rec);
+    });
+    return SEARCH_MODULE_ORDER.filter(function (m) {
+      return byModule[m] && byModule[m].length;
+    }).map(function (m) {
+      return { module: m, label: SEARCH_MODULE_LABELS[m], records: byModule[m] };
+    });
+  }
+
+  // Wraps the first contiguous occurrence of the full query inside `text`
+  // in <mark> - subtle, no mutation of the underlying record. A record
+  // that only matched via token-spread (rank 5, no single contiguous
+  // span anywhere) simply shows no highlight, which is correct: there is
+  // no one span to point at.
+  function searchHighlightHtml(text, queryLower) {
+    if (!text) return "";
+    var escaped = escapeHtml(text);
+    if (!queryLower) return escaped;
+    var idx = text.toLowerCase().indexOf(queryLower);
+    if (idx === -1) return escaped;
+    return (
+      escapeHtml(text.slice(0, idx)) +
+      "<mark class=\"search-highlight\">" + escapeHtml(text.slice(idx, idx + queryLower.length)) + "</mark>" +
+      escapeHtml(text.slice(idx + queryLower.length))
+    );
+  }
+
+  function searchResultRowHtml(rec, index, queryLower) {
+    return (
+      '<button type="button" class="search-result-row" data-search-result-index="' + index + '">' +
+      (rec.context ? '<div class="search-result-context">' + searchHighlightHtml(rec.context, queryLower) + "</div>" : "") +
+      '<div class="search-result-title">' + (rec.isTask ? "Task: " : "") + searchHighlightHtml(rec.title, queryLower) + "</div>" +
+      (rec.meta ? '<div class="search-result-meta">' + escapeHtml(rec.meta) + "</div>" : "") +
+      "</button>"
+    );
+  }
+
+  function renderSearchResults(query) {
+    var container = document.getElementById("search-results");
+    if (!container) return;
+    var trimmed = (query || "").trim();
+    searchSelectedIndex = -1;
+
+    if (!trimmed) {
+      container.innerHTML = '<p class="search-empty-state">Search across Progress Hub</p>';
+      searchResultNavItems = [];
+      return;
+    }
+
+    var results = searchRecords(trimmed);
+    if (!results.length) {
+      container.innerHTML = '<p class="search-empty-state">No results for “' + escapeHtml(trimmed) + '”</p>';
+      searchResultNavItems = [];
+      return;
+    }
+
+    var queryLower = trimmed.toLowerCase();
+    var flatNavItems = [];
+    container.innerHTML = groupSearchResults(results)
+      .map(function (group) {
+        var rowsHtml = group.records
+          .map(function (rec) {
+            var index = flatNavItems.length;
+            flatNavItems.push(rec.navItem);
+            return searchResultRowHtml(rec, index, queryLower);
+          })
+          .join("");
+        return (
+          '<div class="search-result-group">' +
+          '<div class="search-group-title">' + escapeHtml(group.label) + ' <span class="search-group-count">(' + group.records.length + ")</span></div>" +
+          rowsHtml +
+          "</div>"
+        );
+      })
+      .join("");
+    searchResultNavItems = flatNavItems;
+
+    container.querySelectorAll("[data-search-result-index]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        activateSearchResult(Number(btn.getAttribute("data-search-result-index")));
+      });
+    });
+  }
+
+  // Closes search BEFORE navigating (sprint requirement) so the result the
+  // user lands on isn't sitting behind the search overlay.
+  function activateSearchResult(index) {
+    var navItem = searchResultNavItems[index];
+    if (!navItem) return;
+    closeSearchOverlay();
+    navigateToItem(navItem);
+  }
+
+  function moveSearchSelection(delta) {
+    var rows = document.querySelectorAll("#search-results [data-search-result-index]");
+    if (!rows.length) return;
+    var next = Math.max(0, Math.min(rows.length - 1, searchSelectedIndex + delta));
+    rows.forEach(function (row, i) {
+      row.classList.toggle("is-selected", i === next);
+    });
+    searchSelectedIndex = next;
+    rows[next].scrollIntoView({ block: "nearest" });
+  }
+
+  function handleSearchInputKeydown(e) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      moveSearchSelection(1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      moveSearchSelection(-1);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      activateSearchResult(searchSelectedIndex === -1 ? 0 : searchSelectedIndex);
+    } else if (e.key === "Escape") {
+      closeSearchOverlay();
+    }
+  }
+
+  function openSearchOverlay() {
+    var overlay = document.getElementById("search-overlay");
+    var input = document.getElementById("search-input");
+    if (!overlay || !input) return;
+    overlay.hidden = false;
+    input.value = "";
+    renderSearchResults("");
+    input.focus();
+  }
+
+  function closeSearchOverlay() {
+    var overlay = document.getElementById("search-overlay");
+    if (overlay) overlay.hidden = true;
+  }
+
+  function initGlobalSearch() {
+    var openBtn = document.getElementById("global-search-btn");
+    if (openBtn) openBtn.addEventListener("click", openSearchOverlay);
+
+    var overlay = document.getElementById("search-overlay");
+    if (overlay) {
+      overlay.addEventListener("click", function (e) {
+        if (e.target === overlay) closeSearchOverlay();
+      });
+    }
+
+    var closeBtn = document.getElementById("search-close-btn");
+    if (closeBtn) closeBtn.addEventListener("click", closeSearchOverlay);
+
+    var input = document.getElementById("search-input");
+    if (input) {
+      input.addEventListener("input", function () {
+        renderSearchResults(input.value);
+      });
+      input.addEventListener("keydown", handleSearchInputKeydown);
+    }
+
+    document.addEventListener("keydown", function (e) {
+      var key = e.key === "k" || e.key === "K";
+      if (!key || !(e.metaKey || e.ctrlKey)) return;
+      // Never hijack the shortcut while the user is actively typing
+      // anywhere - not just inside the shared #modal-overlay (Edit/Add
+      // forms), but also the page's own inline text fields, like
+      // Training's "Add a Session" panel or the paste-import textareas,
+      // none of which live inside that modal at all.
+      if (isTypingInFormField()) return;
+      // Belt and braces: also skip if the shared edit/add modal is open
+      // but focus isn't currently resting in one of its fields (e.g. the
+      // user just clicked a checkbox) - still don't stack search on top
+      // of it.
+      var editModal = document.getElementById("modal-overlay");
+      if (editModal && !editModal.hidden) return;
+      e.preventDefault();
+      openSearchOverlay();
+    });
+  }
+
+  function isTypingInFormField() {
+    var el = document.activeElement;
+    if (!el) return false;
+    var tag = el.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!el.isContentEditable;
   }
 
   function statPillHtml(value, label) {
@@ -6935,6 +7327,7 @@
     initManagementMenus();
     initDataButtons();
     initDashboardCustomize();
+    initGlobalSearch();
     initGlobalTimerControls();
     initAuth();
     renderAll();
