@@ -80,6 +80,7 @@
   var trainingScreenshotPreview = []; // array of preview-row objects while status === "preview"
   var archivedCodingSectionExpanded = false;
   var archivedStudySectionExpanded = false;
+  var weeklySummaryExpanded = false;
   var openManagementMenu = null;
 
   var activeTimer = {
@@ -925,6 +926,36 @@
     return d;
   }
 
+  // The one place that answers "what is the current local Monday-Sunday
+  // week" as plain ISO date strings - Dashboard's Training stat card,
+  // Training's own weekly stats, and the Weekly Summary all call this
+  // instead of each re-deriving weekStart/weekEnd from startOfWeek(), so
+  // there is exactly one week-boundary implementation in the app.
+  function currentWeekRange() {
+    var weekStart = startOfWeek(new Date());
+    var weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    return { startIso: isoFromDate(weekStart), endIso: isoFromDate(weekEnd) };
+  }
+
+  // "Sep 7–13, 2026" when the week sits inside one month; expands to name
+  // both months ("Sep 28 – Oct 4, 2026") or both years ("Dec 29, 2025 – Jan
+  // 4, 2026") when the week crosses that boundary, rather than printing a
+  // misleading same-month-style range.
+  function formatWeekRangeLabel(startIso, endIso) {
+    var start = localDateFromISO(startIso);
+    var end = localDateFromISO(endIso);
+    var startMonth = start.toLocaleDateString(undefined, { month: "short" });
+    var endMonth = end.toLocaleDateString(undefined, { month: "short" });
+    if (start.getFullYear() !== end.getFullYear()) {
+      return startMonth + " " + start.getDate() + ", " + start.getFullYear() + " – " + endMonth + " " + end.getDate() + ", " + end.getFullYear();
+    }
+    if (start.getMonth() !== end.getMonth()) {
+      return startMonth + " " + start.getDate() + " – " + endMonth + " " + end.getDate() + ", " + start.getFullYear();
+    }
+    return startMonth + " " + start.getDate() + "–" + end.getDate() + ", " + start.getFullYear();
+  }
+
   function showToast(message) {
     var toast = document.getElementById("toast");
     if (!toast) return;
@@ -1211,6 +1242,236 @@
     return items;
   }
 
+  // Weekly Progress Summary — entirely derived from current state at render
+  // time (see renderWeeklySummaryCard()). No new persisted fields, no
+  // migration, nothing written back to Supabase: this just reads
+  // state.* and computeAttentionItems() and returns a plain object.
+  //
+  // Reliability policy per module (this is the part that took the actual
+  // thought - see the sprint's own instructions not to claim weekly
+  // completion without a timestamp that actually supports it):
+  //
+  // - Training: sessions carry a real `date` (the day the session is
+  //   scheduled/happened) - filtering by date and reading `completed` is
+  //   exact, no proxy needed. Same fields renderTrainingStats() already
+  //   uses.
+  // - Guitar: `lastPracticed` is stamped ONLY by the two deliberate
+  //   "practiced" actions (openGuitarItemModal's quick-practice path and
+  //   the practice timer) and is left untouched by editing the item, so
+  //   "practiced this week" is a clean signal. There is no practice-COUNT
+  //   field anywhere in the model, so this reports "N items practiced this
+  //   week", never a session count.
+  // - Listening: `dateFinished` is stamped automatically the moment status
+  //   becomes "Finished" (see the Listening save handler) and is never
+  //   touched afterward, so "finished this week" is exact.
+  // - Study: `lastWorkedOn` is stamped ONLY by the task's status-change
+  //   handler (data-set-study-task-status) - not by editing the task via
+  //   its modal, which explicitly preserves the prior value. So "worked on
+  //   this week" (lastWorkedOn in range) is reliable. "Completed this
+  //   week" uses status === "Completed" AND lastWorkedOn in range as a
+  //   proxy for a completion timestamp the data model doesn't have - this
+  //   is accurate for the normal path (status flips to Completed, which is
+  //   the only thing that touches lastWorkedOn) but could over-count in the
+  //   rare case someone flips a task away from Completed and back within
+  //   the same week without it representing new completion. Documented in
+  //   the sprint report; not fixable without a schema change, which is out
+  //   of scope here.
+  // - Coding tasks: `lastWorkedOn` is stamped ONLY by the dedicated "Worked
+  //   On Today" button - completely decoupled from status, including the
+  //   Done transition (marking a task Done, whether via the quick-status
+  //   dropdown or Edit Task, never touches lastWorkedOn). That means
+  //   status === "Done" AND lastWorkedOn-in-week would NOT reliably mean
+  //   "completed this week" - those two facts can be true for entirely
+  //   unrelated reasons. So unlike Study, Coding intentionally has no
+  //   "completed this week" metric at all: only "worked on this week"
+  //   (lastWorkedOn) and current snapshot counts (active tasks/projects).
+  // - Races: the seed/add/edit shape has no createdAt at all, so "races
+  //   added this week" cannot be computed and isn't attempted. A race's
+  //   own `date` is a real calendar event date though, so "completed this
+  //   week" (status Completed AND date in range) is exact and is the only
+  //   Races metric included - and only when it's non-zero, per the sprint
+  //   brief ("Races may be included only if something meaningful changed").
+  function computeWeeklySummary() {
+    var week = currentWeekRange();
+    var today = todayISO();
+
+    function inWeek(iso) {
+      return !!iso && iso >= week.startIso && iso <= week.endIso;
+    }
+
+    // ---- Training (exact - reuses the same date/completed fields
+    // renderTrainingStats() does, just without touching that function) ----
+    var weekSessions = state.trainingSessions.filter(function (s) {
+      return s.date >= week.startIso && s.date <= week.endIso;
+    });
+    var trainingCompleted = weekSessions.filter(function (s) {
+      return s.completed;
+    }).length;
+    var trainingPct = weekSessions.length ? Math.round((trainingCompleted / weekSessions.length) * 100) : 0;
+    var completedBySport = {};
+    weekSessions.forEach(function (s) {
+      if (s.completed) completedBySport[s.sport] = (completedBySport[s.sport] || 0) + 1;
+    });
+    var completedMinutes = null;
+    var hasCompletedDuration = false;
+    weekSessions.forEach(function (s) {
+      if (!s.completed) return;
+      var mins = parseDurationToMinutes(s.duration);
+      if (mins != null) {
+        hasCompletedDuration = true;
+        completedMinutes = (completedMinutes || 0) + mins;
+      }
+    });
+    var training = {
+      planned: weekSessions.length,
+      completed: trainingCompleted,
+      pct: trainingPct,
+      completedBySport: completedBySport,
+      completedDurationLabel: hasCompletedDuration ? formatDurationMinutes(completedMinutes) : null,
+      hasActivity: weekSessions.length > 0,
+    };
+
+    // ---- Study ----
+    var activeStudyTasks = state.studyTasks.filter(function (t) {
+      return !isStudyTaskEffectivelyArchived(t);
+    });
+    var studyWorkedOn = activeStudyTasks.filter(function (t) {
+      return inWeek(t.lastWorkedOn);
+    });
+    var studyCompletedThisWeek = studyWorkedOn.filter(function (t) {
+      return t.status === "Completed";
+    });
+    var studyActive = activeStudyTasks.filter(function (t) {
+      return t.status === "In Progress" || t.status === "Reviewing";
+    });
+    var studyOverdue = activeStudyTasks.filter(function (t) {
+      return t.dueDate && t.dueDate < today && t.status !== "Completed";
+    });
+    var study = {
+      completedThisWeek: studyCompletedThisWeek.length,
+      workedOnThisWeek: studyWorkedOn.length,
+      active: studyActive.length,
+      overdue: studyOverdue.length,
+      hasActivity: studyWorkedOn.length > 0,
+    };
+
+    // ---- Coding (no completed-this-week metric - see comment above) ----
+    var activeCodingTasksAll = state.codingTasks.filter(function (t) {
+      return !isCodingTaskEffectivelyArchived(t);
+    });
+    var codingWorkedOn = activeCodingTasksAll.filter(function (t) {
+      return inWeek(t.lastWorkedOn);
+    });
+    var codingActiveTasks = activeCodingTasksAll.filter(function (t) {
+      return t.status !== "Done";
+    });
+    var codingActiveProjects = activeCodingProjects().filter(function (p) {
+      return p.status === "Building" || p.status === "Testing";
+    });
+    var codingProjectsWorkedOnIds = {};
+    codingWorkedOn.forEach(function (t) {
+      codingProjectsWorkedOnIds[t.projectId] = true;
+    });
+    activeCodingProjects().forEach(function (p) {
+      if (inWeek(p.lastWorkedOn)) codingProjectsWorkedOnIds[p.id] = true;
+    });
+    var codingProjectsWorkedOnCount = Object.keys(codingProjectsWorkedOnIds).length;
+    var coding = {
+      workedOnThisWeek: codingWorkedOn.length,
+      activeTasks: codingActiveTasks.length,
+      activeProjects: codingActiveProjects.length,
+      projectsWorkedOnThisWeek: codingProjectsWorkedOnCount,
+      hasActivity: codingWorkedOn.length > 0 || codingProjectsWorkedOnCount > 0,
+    };
+
+    // ---- Guitar ----
+    var guitarPracticedThisWeek = state.guitarItems.filter(function (g) {
+      return inWeek(g.lastPracticed);
+    });
+    var guitar = {
+      practicedThisWeek: guitarPracticedThisWeek.length,
+      avgConfidence: state.guitarItems.length ? avgFieldPercent(state.guitarItems, "confidence") : null,
+      hasActivity: guitarPracticedThisWeek.length > 0,
+    };
+
+    // ---- Listening ----
+    var listeningFinishedThisWeek = state.listening.filter(function (a) {
+      return a.status === "Finished" && inWeek(a.dateFinished);
+    });
+    var listeningAddedThisWeek = state.listening.filter(function (a) {
+      return inWeek((a.createdAt || "").slice(0, 10));
+    });
+    var currentlyListeningCount = state.listening.filter(function (a) {
+      return a.status === "Listening";
+    }).length;
+    var listening = {
+      finishedThisWeek: listeningFinishedThisWeek.length,
+      addedThisWeek: listeningAddedThisWeek.length,
+      currentlyListening: currentlyListeningCount,
+      hasActivity: listeningFinishedThisWeek.length > 0 || listeningAddedThisWeek.length > 0,
+    };
+
+    // ---- Races (only a real event-date-backed metric; see comment above) ----
+    var racesCompletedThisWeek = state.races.filter(function (r) {
+      return r.status === "Completed" && inWeek(r.date);
+    });
+    var races = {
+      completedThisWeek: racesCompletedThisWeek.length,
+      hasActivity: racesCompletedThisWeek.length > 0,
+    };
+
+    var hasAnyActivity = training.hasActivity || study.hasActivity || coding.hasActivity || guitar.hasActivity || listening.hasActivity || races.hasActivity;
+
+    // ---- Highlights: deterministic, only from real non-zero numbers above,
+    // capped to 5. No motivational filler, no AI. ----
+    var highlights = [];
+    if (training.hasActivity) {
+      highlights.push("Completed " + training.completed + " of " + training.planned + " training session" + (training.planned === 1 ? "" : "s"));
+    }
+    if (coding.workedOnThisWeek > 0) {
+      highlights.push("Worked on " + coding.workedOnThisWeek + " coding task" + (coding.workedOnThisWeek === 1 ? "" : "s"));
+    }
+    if (listening.finishedThisWeek > 0) {
+      highlights.push("Finished " + listening.finishedThisWeek + " album" + (listening.finishedThisWeek === 1 ? "" : "s"));
+    }
+    if (study.completedThisWeek > 0) {
+      highlights.push("Completed " + study.completedThisWeek + " Study task" + (study.completedThisWeek === 1 ? "" : "s"));
+    }
+    if (guitar.practicedThisWeek > 0) {
+      highlights.push("Practiced " + guitar.practicedThisWeek + " guitar item" + (guitar.practicedThisWeek === 1 ? "" : "s"));
+    }
+    if (races.completedThisWeek > 0) {
+      highlights.push("Completed " + races.completedThisWeek + " race" + (races.completedThisWeek === 1 ? "" : "s"));
+    }
+    highlights = highlights.slice(0, 5);
+
+    // ---- Needs Attention: the exact same engine the Dashboard's own
+    // "Items Needing Attention" card uses - grouped by module for a count
+    // line, and capped the same way (ATTENTION_VISIBLE_CAP) for the
+    // clickable list. No second attention implementation. ----
+    var attentionItems = computeAttentionItems();
+    var attentionByModule = {};
+    attentionItems.forEach(function (item) {
+      attentionByModule[item.module] = (attentionByModule[item.module] || 0) + 1;
+    });
+
+    return {
+      week: week,
+      weekLabel: formatWeekRangeLabel(week.startIso, week.endIso),
+      training: training,
+      study: study,
+      coding: coding,
+      guitar: guitar,
+      listening: listening,
+      races: races,
+      highlights: highlights,
+      attentionItems: attentionItems.slice(0, ATTENTION_VISIBLE_CAP),
+      attentionByModule: attentionByModule,
+      attentionTotal: attentionItems.length,
+      hasAnyActivity: hasAnyActivity,
+    };
+  }
+
   // Opens the target module tab, ensures the record is actually visible
   // (clearing a filter that would hide it), then scrolls it into view and
   // briefly highlights it. Always locates the element by its stable id
@@ -1317,6 +1578,226 @@
         ? '[data-coding-task-id="' + item.taskId + '"]'
         : '[data-coding-project-id="' + item.itemId + '"]';
       scrollAndHighlight(codingTargetSelector);
+    }
+  }
+
+  function statPillHtml(value, label) {
+    return '<div class="stat-pill"><strong>' + value + "</strong>" + label + "</div>";
+  }
+
+  // "3 tasks completed · 2 active" when at least one part is non-zero, or a
+  // plain "No activity this week" line otherwise - one small helper so the
+  // "don't show zero-heavy clutter" rule (sprint brief, section 11) is
+  // applied the same way for every module's collapsed line instead of five
+  // separate ad hoc checks.
+  function weeklySummaryLineText(parts) {
+    var nonEmpty = parts.filter(Boolean);
+    return nonEmpty.length ? nonEmpty.join(" · ") : "No activity this week";
+  }
+
+  var WEEKLY_SUMMARY_MODULES = [
+    { key: "training", tab: "training", label: "Training" },
+    { key: "study", tab: "study", label: "Study" },
+    { key: "coding", tab: "codingProjects", label: "Coding" },
+    { key: "guitar", tab: "guitar", label: "Guitar" },
+    { key: "listening", tab: "listening", label: "Listening" },
+  ];
+
+  function weeklySummaryCollapsedLine(moduleKey, summary) {
+    if (moduleKey === "training") {
+      var t = summary.training;
+      return t.planned > 0 ? t.completed + " / " + t.planned + " sessions completed" : "No activity this week";
+    }
+    if (moduleKey === "study") {
+      var st = summary.study;
+      return weeklySummaryLineText([
+        st.completedThisWeek > 0 ? st.completedThisWeek + " task" + (st.completedThisWeek === 1 ? "" : "s") + " completed" : "",
+        st.active > 0 ? st.active + " active" : "",
+      ]);
+    }
+    if (moduleKey === "coding") {
+      var c = summary.coding;
+      return weeklySummaryLineText([
+        c.workedOnThisWeek > 0 ? c.workedOnThisWeek + " task" + (c.workedOnThisWeek === 1 ? "" : "s") + " worked on" : "",
+        c.activeProjects > 0 ? c.activeProjects + " project" + (c.activeProjects === 1 ? "" : "s") + " active" : "",
+      ]);
+    }
+    if (moduleKey === "guitar") {
+      var g = summary.guitar;
+      return g.practicedThisWeek > 0 ? g.practicedThisWeek + " item" + (g.practicedThisWeek === 1 ? "" : "s") + " practiced" : "No activity this week";
+    }
+    if (moduleKey === "listening") {
+      var l = summary.listening;
+      return l.finishedThisWeek > 0 ? l.finishedThisWeek + " album" + (l.finishedThisWeek === 1 ? "" : "s") + " finished" : "No activity this week";
+    }
+    return "";
+  }
+
+  function weeklySummaryTrainingSectionHtml(t) {
+    if (!t.hasActivity) return '<p class="weekly-summary-empty">No activity this week.</p>';
+    var sportPills = Object.keys(t.completedBySport)
+      .sort()
+      .map(function (sport) {
+        return statPillHtml(t.completedBySport[sport], sport);
+      })
+      .join("");
+    return (
+      '<div class="stats-row">' +
+      statPillHtml(t.completed + " / " + t.planned + " (" + t.pct + "%)", "completed this week") +
+      (sportPills ? sportPills : "") +
+      (t.completedDurationLabel ? statPillHtml(t.completedDurationLabel, "completed time this week") : "") +
+      "</div>"
+    );
+  }
+
+  function weeklySummarySectionHtml(pills) {
+    var kept = pills.filter(Boolean);
+    return kept.length ? '<div class="stats-row">' + kept.join("") + "</div>" : '<p class="weekly-summary-empty">No activity this week.</p>';
+  }
+
+  // Needs Attention rolls up computeAttentionItems() - the exact same
+  // engine the Dashboard's own "Items Needing Attention" card uses - into
+  // one module-grouped count line. Deliberately NOT a second copy of that
+  // card's item list: the Dashboard already shows every one of these items,
+  // always visible, one card below this one, so repeating the full list
+  // here read as pure duplication (caught in a visual-quality pass) rather
+  // than new information. The count line is a "here's the shape of it, see
+  // below for detail" pointer - clicking it scrolls to and highlights the
+  // real card instead of re-showing its contents.
+  var WEEKLY_SUMMARY_ATTENTION_LABELS = {
+    guitar: "🎸 Guitar",
+    study: "📚 Study",
+    races: "🏁 Races",
+    training: "🏋 Training",
+    codingProjects: "💻 Coding",
+  };
+
+  function weeklySummaryAttentionHtml(summary) {
+    // Nothing to add over the Dashboard's own (always-visible) empty state
+    // right below - omit the section rather than repeat "nothing needs
+    // attention" a second time.
+    if (!summary.attentionTotal) return "";
+    var counts = Object.keys(summary.attentionByModule)
+      .map(function (key) {
+        return (WEEKLY_SUMMARY_ATTENTION_LABELS[key] || key) + " " + summary.attentionByModule[key];
+      })
+      .join(" · ");
+    return (
+      '<h4 class="weekly-summary-section-title">Needs Attention</h4>' +
+      '<button type="button" id="weekly-summary-attention-link" class="weekly-summary-attention-count">' +
+      counts + " — see Items Needing Attention below" +
+      "</button>"
+    );
+  }
+
+  function renderWeeklySummaryCard() {
+    var section = document.querySelector('.tab-section[data-section="dashboard"]');
+    if (!section) return;
+    var card = document.getElementById("dashboard-weekly-summary");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "dashboard-weekly-summary";
+      card.className = "card";
+      var dataCard = section.querySelector(".data-card");
+      section.insertBefore(card, dataCard);
+    }
+
+    var summary = computeWeeklySummary();
+    var toggleLabel = (weeklySummaryExpanded ? "Hide" : "View") + " Weekly Summary " + (weeklySummaryExpanded ? "▴" : "▾");
+
+    var collapsedHtml;
+    if (!summary.hasAnyActivity) {
+      collapsedHtml = '<p class="weekly-summary-empty">No activity recorded this week.</p>';
+    } else {
+      collapsedHtml =
+        '<div class="weekly-summary-collapsed-list">' +
+        WEEKLY_SUMMARY_MODULES.map(function (m) {
+          return (
+            '<button type="button" class="weekly-summary-row" data-goto="' + m.tab + '">' +
+            '<span class="weekly-summary-row-label">' + m.label + "</span>" +
+            '<span class="weekly-summary-row-value">' + escapeHtml(weeklySummaryCollapsedLine(m.key, summary)) + "</span>" +
+            "</button>"
+          );
+        }).join("") +
+        "</div>";
+    }
+
+    var fullHtml = "";
+    if (weeklySummaryExpanded) {
+      var racesSectionHtml = summary.races.hasActivity
+        ? '<div><h4 class="weekly-summary-section-title">Races</h4><div class="stats-row">' + statPillHtml(summary.races.completedThisWeek, "completed this week") + "</div></div>"
+        : "";
+
+      fullHtml =
+        '<div class="weekly-summary-full">' +
+        (!summary.hasAnyActivity
+          ? '<p class="weekly-summary-empty">No activity recorded this week.</p>'
+          : '<div><h4 class="weekly-summary-section-title">Training</h4>' + weeklySummaryTrainingSectionHtml(summary.training) + "</div>" +
+            '<div><h4 class="weekly-summary-section-title">Study</h4>' +
+            weeklySummarySectionHtml([
+              summary.study.completedThisWeek > 0 ? statPillHtml(summary.study.completedThisWeek, "completed this week") : "",
+              summary.study.workedOnThisWeek > 0 ? statPillHtml(summary.study.workedOnThisWeek, "worked on this week") : "",
+              summary.study.active > 0 ? statPillHtml(summary.study.active, "currently active") : "",
+              summary.study.overdue > 0 ? statPillHtml(summary.study.overdue, "overdue") : "",
+            ]) +
+            "</div>" +
+            '<div><h4 class="weekly-summary-section-title">Coding</h4>' +
+            weeklySummarySectionHtml([
+              summary.coding.workedOnThisWeek > 0 ? statPillHtml(summary.coding.workedOnThisWeek, "tasks worked on this week") : "",
+              summary.coding.projectsWorkedOnThisWeek > 0 ? statPillHtml(summary.coding.projectsWorkedOnThisWeek, "projects worked on this week") : "",
+              summary.coding.activeTasks > 0 ? statPillHtml(summary.coding.activeTasks, "active tasks") : "",
+              summary.coding.activeProjects > 0 ? statPillHtml(summary.coding.activeProjects, "active projects") : "",
+            ]) +
+            "</div>" +
+            '<div><h4 class="weekly-summary-section-title">Guitar</h4>' +
+            weeklySummarySectionHtml([
+              summary.guitar.practicedThisWeek > 0 ? statPillHtml(summary.guitar.practicedThisWeek, "items practiced this week") : "",
+              summary.guitar.avgConfidence ? statPillHtml(summary.guitar.avgConfidence, "average confidence") : "",
+            ]) +
+            "</div>" +
+            '<div><h4 class="weekly-summary-section-title">Listening</h4>' +
+            weeklySummarySectionHtml([
+              summary.listening.finishedThisWeek > 0 ? statPillHtml(summary.listening.finishedThisWeek, "finished this week") : "",
+              summary.listening.addedThisWeek > 0 ? statPillHtml(summary.listening.addedThisWeek, "added this week") : "",
+              summary.listening.currentlyListening > 0 ? statPillHtml(summary.listening.currentlyListening, "currently listening") : "",
+            ]) +
+            "</div>" +
+            racesSectionHtml +
+            (summary.highlights.length
+              ? '<div><h4 class="weekly-summary-section-title">Highlights</h4><ul class="weekly-summary-highlights">' +
+                summary.highlights.map(function (h) { return "<li>" + escapeHtml(h) + "</li>"; }).join("") +
+                "</ul></div>"
+              : "")) +
+        (summary.attentionTotal ? "<div>" + weeklySummaryAttentionHtml(summary) + "</div>" : "") +
+        "</div>";
+    }
+
+    card.innerHTML =
+      '<h3 class="card-title">Weekly Summary</h3>' +
+      '<p class="weekly-summary-date-range">' + escapeHtml(summary.weekLabel) + "</p>" +
+      collapsedHtml +
+      '<button type="button" class="coding-tasks-toggle" id="weekly-summary-toggle-btn" aria-expanded="' + (weeklySummaryExpanded ? "true" : "false") + '">' + toggleLabel + "</button>" +
+      fullHtml;
+
+    card.querySelectorAll("[data-goto]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        setActiveTab(btn.getAttribute("data-goto"));
+      });
+    });
+
+    var toggleBtn = card.querySelector("#weekly-summary-toggle-btn");
+    if (toggleBtn) {
+      toggleBtn.addEventListener("click", function () {
+        weeklySummaryExpanded = !weeklySummaryExpanded;
+        renderWeeklySummaryCard();
+      });
+    }
+
+    var attentionLink = card.querySelector("#weekly-summary-attention-link");
+    if (attentionLink) {
+      attentionLink.addEventListener("click", function () {
+        scrollAndHighlight("#dashboard-attention");
+      });
     }
   }
 
@@ -1617,11 +2098,9 @@
     var el = document.getElementById("dashboard-content");
     var today = todayISO();
 
-    var weekStart = startOfWeek(new Date());
-    var weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekEnd.getDate() + 6);
-    var weekStartIso = isoFromDate(weekStart);
-    var weekEndIso = isoFromDate(weekEnd);
+    var thisWeek = currentWeekRange();
+    var weekStartIso = thisWeek.startIso;
+    var weekEndIso = thisWeek.endIso;
 
     var weekSessions = state.trainingSessions.filter(function (s) {
       return s.date >= weekStartIso && s.date <= weekEndIso;
@@ -1754,6 +2233,7 @@
       });
     }
 
+    renderWeeklySummaryCard();
     renderTodayTrainingCard();
     renderAttentionCard();
   }
@@ -2125,11 +2605,9 @@
 
   function renderTrainingStats() {
     var el = document.getElementById("training-stats");
-    var weekStart = startOfWeek(new Date());
-    var weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekEnd.getDate() + 6);
-    var weekStartIso = isoFromDate(weekStart);
-    var weekEndIso = isoFromDate(weekEnd);
+    var thisWeek = currentWeekRange();
+    var weekStartIso = thisWeek.startIso;
+    var weekEndIso = thisWeek.endIso;
 
     var weekSessions = state.trainingSessions.filter(function (s) {
       return s.date >= weekStartIso && s.date <= weekEndIso;

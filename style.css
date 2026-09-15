@@ -603,6 +603,114 @@ body[data-theme="dark"] .rating-stars {
   outline: none;
 }
 
+/* ===================== WEEKLY SUMMARY ===================== */
+.weekly-summary-date-range {
+  margin: -4px 0 10px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+/* Two (or more, on wide screens) columns instead of five stacked
+   full-width rows - the same five facts read in roughly half the vertical
+   space, so the card stops pushing Today's Training/Attention below the
+   fold. minmax(220px, 1fr) naturally collapses to one column on iPhone
+   without a media query, matching the main stat-card grid's own approach. */
+.weekly-summary-collapsed-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 6px;
+}
+
+.weekly-summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+  background: var(--bg-subtle);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-height: var(--tap-min);
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+
+.weekly-summary-row:hover,
+.weekly-summary-row:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.weekly-summary-row-label {
+  font-weight: 600;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.weekly-summary-row-value {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.weekly-summary-full {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.weekly-summary-section-title {
+  margin: 0 0 6px;
+  font-size: 0.88rem;
+}
+
+.weekly-summary-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.weekly-summary-highlights {
+  list-style: disc;
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+
+/* A pointer to the Dashboard's own Attention card, not a second copy of
+   its list - styled like the app's other quiet text-link toggles
+   (.coding-tasks-toggle) rather than a filled button, since it's
+   secondary to this card's own content. */
+.weekly-summary-attention-count {
+  display: inline-flex;
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 6px 2px;
+  min-height: var(--tap-min);
+  align-items: center;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.weekly-summary-attention-count:hover,
+.weekly-summary-attention-count:focus-visible {
+  text-decoration: underline;
+}
+
 /* ===================== DASHBOARD DRILL-DOWN HIGHLIGHT ===================== */
 @keyframes dashboard-highlight-fade {
   0% { box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.35); outline-color: var(--accent); }
