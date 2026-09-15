@@ -1170,6 +1170,38 @@ button.session-row:focus-visible {
   opacity: 0.6;
 }
 
+/* ===================== CODING TASK DRAG-AND-DROP ===================== */
+/* Desktop/iPad only in practice - iPhone Safari doesn't reliably initiate
+   native HTML5 drag from a touch, so these states simply never trigger
+   there and "Move to Project…" stays the only path. No feature-detection
+   needed: nothing here degrades on a device that can't start a drag. */
+.coding-task-row[draggable="true"] {
+  cursor: grab;
+}
+
+.coding-task-row.is-dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+.coding-project-card {
+  transition: outline-color 0.15s ease, background-color 0.15s ease;
+}
+
+/* Shown on every eligible destination for the duration of the drag, so a
+   collapsed project is just as valid a target as an expanded one. */
+.coding-project-card.coding-drop-eligible {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+
+/* Stronger state while the dragged task is directly over this card. */
+.coding-project-card.coding-drop-active {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  background-color: rgba(var(--accent-rgb), 0.08);
+}
+
 /* Study-only emphasis: active work (In Progress / Reviewing) reads as the
    most prominent row without changing size, so it doesn't compete with
    completed rows for attention; completed rows recede via muted title

@@ -67,6 +67,11 @@
   var codingProjectFilter = "All";
   var expandedCodingProjectIds = {};
   var expandedStudySubjectIds = {};
+  // Id of the coding task currently mid-drag (native HTML5 DnD), or null
+  // when no drag is in progress. Read by the delegated dragover/drop
+  // handlers in initCodingTaskDragAndDrop() since dataTransfer's own
+  // payload isn't readable until the drop event fires in most browsers.
+  var draggedCodingTaskId = null;
   var trainingScreenshotFile = null;
   var trainingScreenshotImageDataUrl = "";
   var trainingScreenshotStatus = "idle"; // idle | extracting | error | preview
@@ -570,6 +575,120 @@
     var previousProjectId = task.projectId;
     task.projectId = destProjectId;
     return resolveNextActionAfterReparent(task, previousProjectId);
+  }
+
+  // Drag-and-drop is a second UI on top of the exact same move: it only
+  // ever calls moveCodingTaskToProject() above (never reimplements
+  // reparenting or the Next Action collision rule) and gates eligible drop
+  // targets with the same codingProjectMoveTargets() used by "Move to
+  // Project…", so a project that isn't offered there can't accept a drop
+  // either. "Move to Project…" stays fully wired regardless - this is an
+  // additional way to trigger the same helper, not a replacement, since
+  // native HTML5 drag doesn't reach iPhone touch reliably.
+  //
+  // Delegated on the container (rather than per-row listeners re-attached
+  // on every render) because #coding-projects-list itself is never
+  // replaced - only its innerHTML is - so one set of listeners here
+  // survives every renderCodingProjects() call.
+  function initCodingTaskDragAndDrop() {
+    var container = document.getElementById("coding-projects-list");
+    if (!container) return;
+
+    function clearDropClasses() {
+      container.querySelectorAll(".coding-project-card").forEach(function (card) {
+        card.classList.remove("coding-drop-eligible", "coding-drop-active");
+      });
+    }
+
+    container.addEventListener("dragstart", function (e) {
+      var row = e.target.closest(".coding-task-row");
+      if (!row) return;
+      var taskId = row.getAttribute("data-coding-task-id");
+      var task = findCodingTask(taskId);
+      if (!task) return;
+      draggedCodingTaskId = taskId;
+      row.classList.add("is-dragging");
+      row.setAttribute("aria-grabbed", "true");
+      e.dataTransfer.effectAllowed = "move";
+      try {
+        e.dataTransfer.setData("text/plain", taskId);
+      } catch (err) {
+        // Some older WebViews reject setData with an unsupported MIME type;
+        // drop still works off draggedCodingTaskId, so this is harmless.
+      }
+      var eligibleIds = codingProjectMoveTargets(task.projectId).map(function (p) {
+        return p.id;
+      });
+      container.querySelectorAll(".coding-project-card").forEach(function (card) {
+        if (eligibleIds.indexOf(card.getAttribute("data-coding-project-id")) !== -1) {
+          card.classList.add("coding-drop-eligible");
+        }
+      });
+    });
+
+    container.addEventListener("dragend", function (e) {
+      var row = e.target.closest(".coding-task-row");
+      if (row) {
+        row.classList.remove("is-dragging");
+        row.setAttribute("aria-grabbed", "false");
+      }
+      draggedCodingTaskId = null;
+      clearDropClasses();
+    });
+
+    container.addEventListener("dragover", function (e) {
+      if (!draggedCodingTaskId) return;
+      var card = e.target.closest(".coding-project-card");
+      if (!card || !card.classList.contains("coding-drop-eligible")) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+    });
+
+    container.addEventListener("dragenter", function (e) {
+      if (!draggedCodingTaskId) return;
+      var card = e.target.closest(".coding-project-card");
+      if (!card || !card.classList.contains("coding-drop-eligible")) return;
+      card.classList.add("coding-drop-active");
+    });
+
+    container.addEventListener("dragleave", function (e) {
+      var card = e.target.closest(".coding-project-card");
+      // e.relatedTarget is null when the pointer leaves the window/iframe,
+      // and otherwise the element the pointer entered - only clear the
+      // highlight once it's actually left the card, not just moved between
+      // two of its children (each of which fires its own dragleave).
+      if (!card || (e.relatedTarget && card.contains(e.relatedTarget))) return;
+      card.classList.remove("coding-drop-active");
+    });
+
+    container.addEventListener("drop", function (e) {
+      var card = e.target.closest(".coding-project-card");
+      var taskId = draggedCodingTaskId;
+      draggedCodingTaskId = null;
+      if (!card || !taskId) return;
+      e.preventDefault();
+      card.classList.remove("coding-drop-active");
+      if (!card.classList.contains("coding-drop-eligible")) return;
+      var destProjectId = card.getAttribute("data-coding-project-id");
+      var destProject = findCodingProject(destProjectId);
+      var result = moveCodingTaskToProject(taskId, destProjectId);
+      if (!result) return;
+      saveState();
+      renderAll();
+      showToast(
+        result.nextActionCollision
+          ? "Task moved. Existing Next Action kept."
+          : "Task moved to " + (destProject ? destProject.name : "project") + "."
+      );
+      // Destination card is a brand-new element after renderAll() replaced
+      // the grid's innerHTML - wait for that render to commit before
+      // looking it up, same double-rAF pattern scrollAndHighlight() uses.
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          highlightElement(document.querySelector('[data-coding-project-id="' + destProjectId + '"]'));
+        });
+      });
+    });
   }
 
   // Archive is reversible and separate from Delete - archived
@@ -4446,7 +4565,7 @@
                   .map(function (t) {
                     var overdue = !!(t.dueDate && t.dueDate < todayISO() && t.status !== "Done");
                     return (
-                      '<div class="coding-task-row' + (t.status === "Done" ? " completed" : "") + '" data-id="' + t.id + '" data-coding-task-id="' + t.id + '">' +
+                      '<div class="coding-task-row' + (t.status === "Done" ? " completed" : "") + '" data-id="' + t.id + '" data-coding-task-id="' + t.id + '" draggable="true" aria-grabbed="false">' +
                       '<div class="coding-task-main">' +
                       '<div class="coding-task-title">' + escapeHtml(t.title) + (t.isNextAction ? ' <span class="badge badge-next-action">Next Action</span>' : "") + "</div>" +
                       '<div class="coding-task-badges">' +
@@ -5977,6 +6096,7 @@
     initCodingProjectFilter();
     initCodingProjectsPasteImporter();
     initCodingArchivedToggle();
+    initCodingTaskDragAndDrop();
     initManagementMenus();
     initDataButtons();
     initGlobalTimerControls();
